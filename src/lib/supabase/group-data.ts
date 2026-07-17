@@ -137,7 +137,7 @@ export const getShellContext = cache(async () => {
   const weekEnd = format(endOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd");
   const [membershipResult, personalResult, tasksResult, followupsResult] = await Promise.all([
     supabase.from("workspace_members")
-      .select("role,is_admin,profiles!workspace_members_user_id_fkey(full_name),workspaces!workspace_members_workspace_id_fkey(name)")
+      .select("workspace_id,role,is_admin,profiles!workspace_members_user_id_fkey(full_name),workspaces!workspace_members_workspace_id_fkey(name)")
       .eq("user_id", user.id).order("joined_at").limit(1).maybeSingle(),
     supabase.from("weekly_items")
       .select("id", { count: "exact", head: true })
@@ -159,6 +159,7 @@ export const getShellContext = cache(async () => {
     id: user.id,
     name,
     initials,
+    hasGroup: Boolean(membershipRow?.workspace_id),
     role: (membershipRow?.role ?? "engineer") as "leader" | "engineer",
     isAdmin: Boolean(membershipRow?.is_admin || membershipRow?.role === "leader"),
     groupName: workspace?.name ?? "Sin grupo",

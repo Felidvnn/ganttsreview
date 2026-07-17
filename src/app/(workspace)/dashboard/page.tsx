@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { AlertTriangle, ArrowRight, Check, ChevronRight, Clock3, FolderKanban, ListChecks, TrendingUp } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { ProgressRing } from "@/components/progress-ring";
@@ -9,12 +10,13 @@ import { getShellContext } from "@/lib/supabase/group-data";
 import { getWeekData } from "@/lib/supabase/week-data";
 
 export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ scope?: string }> }) {
-  const [allProjects, week, activity, shell, params] = await Promise.all([
+  const [shell, params] = await Promise.all([getShellContext(), searchParams]);
+  if (shell && !shell.hasGroup) redirect("/team");
+
+  const [allProjects, week, activity] = await Promise.all([
     getProjects(),
     getWeekData(),
     getRecentActivity(4),
-    getShellContext(),
-    searchParams,
   ]);
   const isLeader = shell?.role === "leader";
   const scope = isLeader && params.scope === "team" ? "team" : "mine";

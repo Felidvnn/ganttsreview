@@ -97,6 +97,7 @@ button { border: 0; background: none; cursor: pointer; }
   .sidebar-is-collapsed .profile-card { padding-inline: 0; justify-content: center; }
 }
 .page-content { max-width: 1540px; min-height: calc(100vh - 66px); margin: 0 auto; padding: 30px 34px 48px; }
+.workspace-error { max-width: 720px; margin: 9vh auto 0; padding: 28px; display: grid; grid-template-columns: 42px 1fr auto; align-items: center; gap: 18px; }.workspace-error h2 { margin-top: 5px; font-size: 18px; }.workspace-error p { margin-top: 7px; color: var(--muted); font-size: 9px; line-height: 1.5; }
 
 .page-heading { margin-bottom: 25px; }
 .page-heading h2 { margin-top: 5px; font-size: clamp(23px, 2.4vw, 31px); line-height: 1.15; letter-spacing: -.85px; font-weight: 680; }

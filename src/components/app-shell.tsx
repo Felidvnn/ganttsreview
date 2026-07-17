@@ -29,7 +29,7 @@ const titles: Record<string, string> = {
 
 type ShellContext = {
   id: string; name: string; initials: string; role: "leader" | "engineer";
-  isAdmin: boolean; groupName: string; weekPendingCount: number;
+  hasGroup: boolean; isAdmin: boolean; groupName: string; weekPendingCount: number;
 } | null;
 
 export function AppShell({ children, shell }: { children: React.ReactNode; shell: ShellContext }) {
