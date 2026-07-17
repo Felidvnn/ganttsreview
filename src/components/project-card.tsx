@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { CalendarDays, LockKeyhole, Users } from "lucide-react";
+import { CalendarDays, Crown, LockKeyhole, Users } from "lucide-react";
 import type { Project } from "@/lib/types";
 import { AvatarGroup } from "./avatar";
 import { HealthBadge } from "./status";
@@ -14,7 +14,7 @@ export function ProjectCard({ project }: { project: Project }) {
       <div className="project-progress-head"><span>Avance</span><b>{project.progress}%</b></div>
       <div className="linear-progress"><i style={{ width: `${project.progress}%`, backgroundColor: project.color }} /></div>
       <div className="project-meta"><HealthBadge health={project.health} /><span><CalendarDays size={14} /> {project.dueLabel}</span></div>
-      <div className="project-card-foot"><AvatarGroup people={project.members} /><span>{project.visibility === "Privado" ? <LockKeyhole size={14} /> : <Users size={14} />}{project.visibility}</span></div>
+      <div className="project-card-foot"><AvatarGroup people={project.members} /><span>{project.visibilityKey === "private" ? <LockKeyhole size={14} /> : project.visibilityKey === "shared" ? <Crown size={14} /> : <Users size={14} />}{project.visibility}</span></div>
     </Link>
   );
 }

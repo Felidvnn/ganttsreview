@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  Check, Clock3, Copy, Crown, LogOut, MailPlus, Plus, ShieldCheck,
+  ArrowRightLeft, Check, Clock3, Copy, Crown, LogOut, MailPlus, Plus, ShieldCheck,
   ShieldOff, Trash2, UserPlus, Users, X,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -22,6 +22,7 @@ export function GroupManager({ data }: { data: GroupData }) {
   const [email, setEmail] = useState("");
   const [groupName, setGroupName] = useState("");
   const [leaderEmail, setLeaderEmail] = useState("");
+  const [successorId, setSuccessorId] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: "ok" | "error"; text: string } | null>(null);
 
@@ -79,6 +80,13 @@ export function GroupManager({ data }: { data: GroupData }) {
     if (!window.confirm(`¿Eliminar a ${member.name} del grupo? Sus proyectos no se borrarán.`)) return;
     run(`remove-${member.id}`, () => supabase.rpc("remove_group_member", { target_workspace: data.group!.id, target_user: member.id }), "Integrante eliminado del grupo.");
   };
+  const engineers = data.members.filter((member) => member.role === "engineer" && member.id !== data.currentUser!.id);
+  const leave = () => {
+    if (isLeader && !successorId) { setMessage({ type: "error", text: "Selecciona a un ingeniero para transferir el liderazgo." }); return; }
+    const prompt = isLeader ? "¿Transferir el liderazgo y salir del grupo?" : "¿Salir de este grupo? Tus proyectos propios se conservarán.";
+    if (!window.confirm(prompt)) return;
+    run("leave", () => supabase.rpc("leave_group", { target_workspace: data.group!.id, target_successor: isLeader ? successorId : null }), "Saliste del grupo.");
+  };
 
   return <>
     <section className="page-heading inline-heading group-heading"><div><span className="eyebrow">GRUPO DE TRABAJO</span><h2>{data.group.name}</h2><p>{data.members.length} integrantes · Tú eres {isLeader ? "líder" : "ingeniero"}{isAdmin && !isLeader ? " y administrador" : ""}</p></div><button className="button secondary" onClick={() => navigator.clipboard.writeText(data.group!.name)}><Copy size={16} /> Copiar nombre</button></section>
@@ -98,6 +106,6 @@ export function GroupManager({ data }: { data: GroupData }) {
 
     {activeInvites.length > 0 && <section className="panel sent-invitations"><div className="panel-head"><div><span className="eyebrow">INVITACIONES</span><h3>Pendientes de respuesta</h3></div></div>{activeInvites.map((item) => <div className="request-row" key={item.id}><GroupAvatar member={{ name: item.subject.name, role: "engineer" }} /><span><b>{item.subject.name}</b><small>{item.subject.email}</small></span><span className="waiting-chip"><Clock3 size={12} /> Esperando respuesta</span>{isAdmin && <button className="icon-button" title="Cancelar" onClick={() => run(item.id, () => supabase.rpc("cancel_group_invitation", { target_invitation: item.id }), "Invitación cancelada.")}><X size={17} /></button>}</div>)}</section>}
 
-    {!isLeader && <button className="leave-group" onClick={() => { if (window.confirm("¿Salir de este grupo?")) run("leave", () => supabase.rpc("leave_group", { target_workspace: data.group!.id }), "Saliste del grupo."); }}><LogOut size={15} /> Abandonar grupo</button>}
+    {isLeader ? <section className="panel group-exit-panel"><div><span className="metric-icon amber"><ArrowRightLeft /></span><div><span className="eyebrow">CAMBIAR DE GRUPO</span><h3>Transferir liderazgo y salir</h3><p>Tus proyectos se conservarán. Los compartidos con este líder volverán a privados.</p></div></div>{engineers.length ? <div className="group-exit-actions"><select value={successorId} onChange={(event) => setSuccessorId(event.target.value)}><option value="">Selecciona nuevo líder</option>{engineers.map((member) => <option value={member.id} key={member.id}>{member.name}</option>)}</select><button className="button danger-outline" disabled={busy === "leave"} onClick={leave}><LogOut size={14} /> Transferir y salir</button></div> : <small>Necesitas al menos un ingeniero en el grupo antes de poder transferirlo.</small>}</section> : <button className="leave-group" disabled={busy === "leave"} onClick={leave}><LogOut size={15} /> Salir de este grupo</button>}
   </>;
 }

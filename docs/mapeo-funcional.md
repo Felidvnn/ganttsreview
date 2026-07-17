@@ -4,7 +4,8 @@
 
 - Autenticación con Supabase y acceso protegido.
 - Grupos con líder, ingenieros y administradores.
-- Proyectos privados, compartidos o visibles para el grupo.
+- Proyectos privados, compartidos con el líder o colaborativos por invitación.
+- Salida de grupo conservando proyectos propios y transferencia segura del liderazgo.
 - Colaboradores con permisos de lectura o edición y registro de cambios.
 - Creación de proyectos con secciones iniciales.
 - Creación, edición y eliminación de tareas e hitos.
@@ -16,7 +17,7 @@
 - Dependencias entre tareas del mismo proyecto o proyectos transversales.
 - Validación para impedir dependencias cíclicas.
 - Vistas Gantt, Lista, Tablero, Hitos, Informes y Actividad.
-- Exportación CSV, HTML, PNG y versión imprimible para PDF.
+- Exportación Excel, HTML, PNG y versión imprimible para PDF.
 - Subtareas y sub-subtareas con avance agregado opcional.
 - Seguimiento operativo separado de la Gantt para compromisos y bloqueos.
 - Resumen semanal, consolidado de portafolio y trazabilidad de tareas.

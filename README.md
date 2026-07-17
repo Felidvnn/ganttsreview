@@ -30,6 +30,7 @@ Abre `http://localhost:3000`. Si no existen variables de Supabase, el acceso ofr
    - [`supabase/migrations/202607150009_task_priority_external_assignees.sql`](supabase/migrations/202607150009_task_priority_external_assignees.sql)
    - [`supabase/migrations/202607170010_drag_hierarchy.sql`](supabase/migrations/202607170010_drag_hierarchy.sql)
    - [`supabase/migrations/202607170011_admin_invitation_readiness.sql`](supabase/migrations/202607170011_admin_invitation_readiness.sql)
+   - [`supabase/migrations/202607170012_project_visibility_group_exit.sql`](supabase/migrations/202607170012_project_visibility_group_exit.sql)
 5. En Supabase, deja habilitado el proveedor **Email** y agrega `http://localhost:3000/auth/callback` a las Redirect URLs de Authentication. Para Vercel, agrega también `https://tu-dominio.vercel.app/auth/callback`.
 6. Cada integrante puede crear su cuenta desde la pantalla de acceso. El trigger `handle_new_user` crea automáticamente su perfil y luego puede solicitar unirse al grupo desde **Grupo**.
 
@@ -42,9 +43,9 @@ El esquema separa dos conceptos:
 - Rol de organización: `leader` o `engineer`.
 - Permiso por proyecto: `owner`, `editor` o `viewer`.
 
-`is_admin` es una capacidad del grupo, no un tercer rol: un ingeniero administrador puede invitar, aceptar o eliminar integrantes, pero conserva la visibilidad normal de ingeniero. El líder ve todos los proyectos del grupo; solo puede editarlos si es creador o colaborador explícito.
+`is_admin` es una capacidad del grupo, no un tercer rol: un ingeniero administrador puede invitar, aceptar o eliminar integrantes, pero conserva la visibilidad normal de ingeniero. El líder ve sus proyectos, aquellos donde fue invitado y los que los ingenieros marcan **Con mi líder**; los proyectos privados permanecen privados.
 
-Las políticas RLS protegen proyectos privados, compartidos y visibles para el espacio de trabajo. La seguridad no depende de ocultar controles en la interfaz. Las modificaciones de tareas quedan registradas en `audit_logs` mediante un trigger de base de datos.
+Las políticas RLS distinguen proyectos privados, compartidos con el líder y colaborativos por invitación. Salir de un grupo conserva los proyectos propios y revoca la visibilidad del líder anterior. La seguridad no depende de ocultar controles en la interfaz. Las modificaciones de tareas quedan registradas en `audit_logs` mediante un trigger de base de datos.
 
 ## Vistas incluidas
 

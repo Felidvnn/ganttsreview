@@ -22,6 +22,8 @@ Finalmente ejecuta `supabase/migrations/202607170010_drag_hierarchy.sql` para po
 
 Después ejecuta `supabase/migrations/202607170011_admin_invitation_readiness.sql` para que administradores e invitados puedan identificarse correctamente durante solicitudes pendientes sin abrir la visibilidad de perfiles ajenos al grupo.
 
+Finalmente ejecuta `supabase/migrations/202607170012_project_visibility_group_exit.sql` para habilitar proyectos privados, compartidos con el líder o colaborativos por invitación, además de la salida segura y transferencia de liderazgo entre grupos.
+
 La migración:
 
 - conserva el workspace y los proyectos existentes;

@@ -31,7 +31,8 @@ export type Project = {
   milestonesDone?: number;
   milestonesTotal?: number;
   blockedTasks?: number;
-  visibility: "Equipo" | "Compartido" | "Privado";
+  visibility: "Colaborativo" | "Con líder" | "Privado";
+  visibilityKey: "workspace" | "shared" | "private";
 };
 
 export type Task = {

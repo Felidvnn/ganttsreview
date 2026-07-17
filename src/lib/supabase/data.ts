@@ -36,12 +36,13 @@ function toPerson(profile: DbProfile | null | undefined, fallbackIndex = 0): Per
 function mapProject(row: DbProject): Project {
   const projectTasks = row.tasks ?? [];
   const creatorProfile = oneProfile(row.creator);
-  const collaborators = (row.project_members ?? []).map((member, index) => ({ ...toPerson(oneProfile(member.profiles), index + 1), permission: member.permission }));
+  const collaborators = row.visibility === "workspace" ? (row.project_members ?? []).map((member, index) => ({ ...toPerson(oneProfile(member.profiles), index + 1), permission: member.permission })) : [];
   const members = [
     ...(row.created_by && creatorProfile ? [{ ...toPerson(creatorProfile, 0), id: row.created_by, permission: "owner" as const }] : []),
     ...collaborators.filter((member) => member.id !== row.created_by),
   ];
-  const visibility: Project["visibility"] = row.visibility === "private" ? "Privado" : row.visibility === "workspace" ? "Equipo" : "Compartido";
+  const visibilityKey = row.visibility === "workspace" ? "workspace" : row.visibility === "shared" ? "shared" : "private";
+  const visibility: Project["visibility"] = visibilityKey === "private" ? "Privado" : visibilityKey === "shared" ? "Con líder" : "Colaborativo";
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const start = row.start_date ? new Date(`${row.start_date}T12:00:00`) : null;
@@ -58,7 +59,7 @@ function mapProject(row: DbProject): Project {
     id: row.id, createdBy: row.created_by, name: row.name, code: row.code, description: row.description ?? "", progress,
     expectedProgress, health, dueLabel: due ? format(due, "dd MMM", { locale: es }) : "Sin fecha",
     dueDate: row.due_date ?? "", startDate: row.start_date ?? "", startLabel: start ? format(start, "dd MMM", { locale: es }) : "Sin fecha",
-    color: row.color ?? "#2f7669", members,
+    color: row.color ?? "#2f7669", members, visibilityKey,
     tasksDone: projectTasks.filter((task) => task.status === "done").length, tasksTotal: projectTasks.length, visibility,
     milestonesDone: milestones.filter((task) => task.status === "done").length, milestonesTotal: milestones.length,
     blockedTasks: projectTasks.filter((task) => task.status === "blocked").length,
@@ -73,12 +74,12 @@ export async function getProjects(): Promise<Project[]> {
   return ((data ?? []) as unknown as DbProject[]).map(mapProject);
 }
 
-export async function getProjectBundle(id: string): Promise<{ project: Project; tasks: Task[]; canEdit: boolean } | null> {
+export async function getProjectBundle(id: string): Promise<{ project: Project; tasks: Task[]; canEdit: boolean; isOwner: boolean } | null> {
   if (!hasSupabaseConfig) {
     const project = demoProjects.find((item) => item.id === id);
     if (!project) return null;
     const projectTasks = demoTasks.filter((task) => task.projectId === id);
-    return { project, tasks: projectTasks.length ? projectTasks : demoTasks.slice(0, 6).map((task) => ({ ...task, projectId: id })), canEdit: true };
+    return { project, tasks: projectTasks.length ? projectTasks : demoTasks.slice(0, 6).map((task) => ({ ...task, projectId: id })), canEdit: true, isOwner: true };
   }
   const supabase = await createServerSupabaseClient();
   const [projectResult, taskResult, sessionResult] = await Promise.all([
@@ -93,7 +94,8 @@ export async function getProjectBundle(id: string): Promise<{ project: Project; 
   const project = mapProject(projectData as unknown as DbProject);
   const user = sessionResult.data.user;
   const rawProject = projectData as unknown as DbProject;
-  const canEdit = Boolean(user && (rawProject.created_by === user.id || rawProject.project_members?.some((member) => member.user_id === user.id && (member.permission === "owner" || member.permission === "editor"))));
+  const canEdit = Boolean(user && (rawProject.created_by === user.id || (rawProject.visibility === "workspace" && rawProject.project_members?.some((member) => member.user_id === user.id && (member.permission === "owner" || member.permission === "editor")))));
+  const isOwner = Boolean(user && rawProject.created_by === user.id);
   const projectStart = projectData.start_date ? new Date(`${projectData.start_date}T12:00:00`) : new Date();
   const mappedTasks = ((taskData ?? []) as unknown as DbTask[]).map((row, index): Task => {
     const startDate = row.start_date ? new Date(`${row.start_date}T12:00:00`) : projectStart;
@@ -115,5 +117,5 @@ export async function getProjectBundle(id: string): Promise<{ project: Project; 
       overdue: Boolean(row.due_date && dueDate < new Date() && row.status !== "done"),
     };
   });
-  return { project, tasks: sortTasksByDate(mappedTasks), canEdit };
+  return { project, tasks: sortTasksByDate(mappedTasks), canEdit, isOwner };
 }

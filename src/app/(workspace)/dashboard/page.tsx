@@ -20,7 +20,9 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   ]);
   const isLeader = shell?.role === "leader";
   const scope = isLeader && params.scope === "team" ? "team" : "mine";
-  const projects = scope === "team" ? allProjects : allProjects.filter((project) => !shell || project.createdBy === shell.id);
+  const personalProjects = shell ? allProjects.filter((project) => project.createdBy === shell.id || project.members.some((member) => member.id === shell.id)) : allProjects;
+  const teamProjects = shell ? allProjects.filter((project) => project.createdBy !== shell.id && project.visibilityKey === "shared") : [];
+  const projects = isLeader ? (scope === "team" ? teamProjects : personalProjects) : allProjects;
   const portfolioProgress = projects.length ? Math.round(projects.reduce((sum, project) => sum + project.progress, 0) / projects.length) : 0;
   const attentionCount = projects.filter((project) => project.health !== "healthy").length;
   const attentionProject = projects.find((project) => project.health === "delayed") ?? projects.find((project) => project.health === "risk");
@@ -35,7 +37,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         <div><span className="date-kicker">{dateLabel}</span><h2>{greeting}{firstName ? `, ${firstName}` : ""} <span>👋</span></h2><p>Este es el pulso de tus proyectos hoy.</p></div>
         <Link href="/week" className="button secondary"><ListChecks size={17} /> Abrir seguimiento</Link>
       </section>
-      {isLeader && <nav className="dashboard-scope-tabs" aria-label="Alcance del tablero"><Link className={scope === "mine" ? "active" : ""} href="/dashboard?scope=mine">Lo mío</Link><Link className={scope === "team" ? "active" : ""} href="/dashboard?scope=team">Mi equipo <span>{allProjects.length}</span></Link></nav>}
+      {isLeader && <nav className="dashboard-scope-tabs" aria-label="Alcance del tablero"><Link className={scope === "mine" ? "active" : ""} href="/dashboard?scope=mine">Mis proyectos <span>{personalProjects.length}</span></Link><Link className={scope === "team" ? "active" : ""} href="/dashboard?scope=team">Compartidos por el equipo <span>{teamProjects.length}</span></Link></nav>}
 
       <section className="metric-grid">
         <article className="metric-card"><span className="metric-icon green"><FolderKanban /></span><div><small>PROYECTOS ACTIVOS</small><b>{projects.length}</b><p><strong>{projects.filter((project) => project.health === "healthy").length}</strong> avanzan según lo esperado</p></div></article>

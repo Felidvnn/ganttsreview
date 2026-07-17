@@ -11,14 +11,14 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   const { id } = await params;
   const bundle = await getProjectBundle(id);
   if (!bundle) notFound();
-  const { project, tasks: displayTasks, canEdit } = bundle;
+  const { project, tasks: displayTasks, canEdit, isOwner } = bundle;
 
   return (
     <div className="project-detail-page">
       <Link href="/projects" className="back-link"><ArrowLeft size={16} /> Proyectos</Link>
       <section className="project-detail-head">
         <div className="project-title-block"><span className="project-mark" style={{ background: project.color }}>{project.code.slice(0, 2)}</span><div><span className="project-code">{project.code}</span><h2>{project.name}</h2><div className="project-submeta"><HealthBadge health={project.health} /><span><CalendarDays size={14} /> {project.startLabel} — {project.dueLabel}</span><span><Users size={14} /> {project.members.length} integrantes</span></div></div></div>
-        <div className="project-head-actions"><AvatarGroup people={project.members} max={4} />{canEdit && <ProjectSharing projectId={project.id} members={project.members} />}</div>
+        <div className="project-head-actions"><AvatarGroup people={project.members} max={4} />{isOwner && <ProjectSharing projectId={project.id} members={project.members} visibility={project.visibilityKey} />}</div>
       </section>
 
       <ProjectWorkspace project={project} initialTasks={displayTasks} canEdit={canEdit} />

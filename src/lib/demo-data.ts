@@ -12,22 +12,22 @@ export const projects: Project[] = [
   {
     id: "planta-norte", name: "Expansión Planta Norte", code: "EPN-24", description: "Ampliación de capacidad y puesta en marcha de nueva línea.",
     progress: 68, expectedProgress: 72, health: "risk", dueLabel: "28 ago", dueDate: "2026-08-28", color: "#a56a22",
-    members: [people[0], people[1], people[2]], tasksDone: 24, tasksTotal: 35, visibility: "Equipo",
+    members: [people[0], people[1], people[2]], tasksDone: 24, tasksTotal: 35, visibility: "Colaborativo", visibilityKey: "workspace",
   },
   {
     id: "automatizacion-l2", name: "Automatización Línea 2", code: "AL2-26", description: "Integración de control, sensores y pruebas operacionales.",
     progress: 82, expectedProgress: 80, health: "healthy", dueLabel: "12 sep", dueDate: "2026-09-12", color: "#277164",
-    members: [people[0], people[3]], tasksDone: 31, tasksTotal: 38, visibility: "Compartido",
+    members: [people[0], people[3]], tasksDone: 31, tasksTotal: 38, visibility: "Con líder", visibilityKey: "shared",
   },
   {
     id: "mejora-logistica", name: "Optimización Logística", code: "LOG-08", description: "Rediseño del flujo de materiales y zonas de preparación.",
     progress: 41, expectedProgress: 59, health: "delayed", dueLabel: "04 ago", dueDate: "2026-08-04", color: "#b4483d",
-    members: [people[0], people[2], people[4]], tasksDone: 11, tasksTotal: 27, visibility: "Equipo",
+    members: [people[0], people[2], people[4]], tasksDone: 11, tasksTotal: 27, visibility: "Colaborativo", visibilityKey: "workspace",
   },
   {
     id: "piloto-energia", name: "Piloto Eficiencia Energética", code: "ENE-14", description: "Instrumentación y evaluación del consumo en equipos críticos.",
     progress: 29, expectedProgress: 31, health: "healthy", dueLabel: "18 oct", dueDate: "2026-10-18", color: "#427358",
-    members: [people[1], people[4]], tasksDone: 7, tasksTotal: 24, visibility: "Privado",
+    members: [people[1], people[4]], tasksDone: 7, tasksTotal: 24, visibility: "Privado", visibilityKey: "private",
   },
 ];
 
