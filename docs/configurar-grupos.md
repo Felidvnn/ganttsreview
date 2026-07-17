@@ -24,6 +24,8 @@ Después ejecuta `supabase/migrations/202607170011_admin_invitation_readiness.sq
 
 Finalmente ejecuta `supabase/migrations/202607170012_project_visibility_group_exit.sql` para habilitar proyectos privados, compartidos con el líder o colaborativos por invitación, además de la salida segura y transferencia de liderazgo entre grupos.
 
+Luego ejecuta `supabase/migrations/202607170013_safe_group_project_removal.sql`. Esta migración permite cerrar un grupo de una sola persona sin eliminar proyectos, conserva el historial de membresías y exige que el propietario escriba el nombre del proyecto antes de borrarlo. Un colaborador nunca borra el proyecto: solo puede retirar su propio acceso.
+
 La migración:
 
 - conserva el workspace y los proyectos existentes;
@@ -36,11 +38,13 @@ La migración:
 
 ## Reglas de acceso
 
-- Líder: ve todos los proyectos del grupo.
-- Ingeniero: ve proyectos propios, compartidos directamente o visibles para todo el grupo.
+- Líder: ve sus proyectos y aquellos marcados como **Con mi líder** por integrantes del grupo.
+- Ingeniero: ve sus proyectos y los proyectos colaborativos a los que fue invitado.
 - Administrador: puede gestionar integrantes, pero no obtiene visibilidad adicional.
 - Creador/editor: puede editar el proyecto.
 - Lector: solo puede consultarlo.
+- Salir o ser retirado de un grupo no elimina proyectos, tareas ni colaboraciones existentes.
+- Solo el propietario real puede eliminar un proyecto y debe confirmar escribiendo su nombre completo.
 
 ## Incorporar personas
 

@@ -31,6 +31,7 @@ Abre `http://localhost:3000`. Si no existen variables de Supabase, el acceso ofr
    - [`supabase/migrations/202607170010_drag_hierarchy.sql`](supabase/migrations/202607170010_drag_hierarchy.sql)
    - [`supabase/migrations/202607170011_admin_invitation_readiness.sql`](supabase/migrations/202607170011_admin_invitation_readiness.sql)
    - [`supabase/migrations/202607170012_project_visibility_group_exit.sql`](supabase/migrations/202607170012_project_visibility_group_exit.sql)
+   - [`supabase/migrations/202607170013_safe_group_project_removal.sql`](supabase/migrations/202607170013_safe_group_project_removal.sql)
 5. En Supabase, deja habilitado el proveedor **Email** y agrega `http://localhost:3000/auth/callback` a las Redirect URLs de Authentication. Para Vercel, agrega también `https://tu-dominio.vercel.app/auth/callback`.
 6. Cada integrante puede crear su cuenta desde la pantalla de acceso. El trigger `handle_new_user` crea automáticamente su perfil y luego puede solicitar unirse al grupo desde **Grupo**.
 
