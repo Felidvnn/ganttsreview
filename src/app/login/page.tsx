@@ -106,7 +106,7 @@ export default function LoginPage() {
 
   const enterDemo = () => {
     localStorage.setItem("orbit-demo", "true");
-    router.push("/dashboard");
+    router.push("/demo");
   };
 
   return (
@@ -154,7 +154,7 @@ export default function LoginPage() {
             {message && <p className="form-success">{message}</p>}
             <button className="button primary login-submit" disabled={loading}>{loading ? (mode === "login" ? "Ingresando..." : "Creando cuenta...") : (mode === "login" ? "Ingresar" : "Crear cuenta")}<ArrowRight size={18} /></button>
           </form>
-          {!hasSupabaseConfig && <><div className="divider"><span>o explora primero</span></div><button className="button demo-button" onClick={enterDemo}>Ver demostración <ArrowRight size={17} /></button></>}
+          <div className="divider"><span>o explora primero</span></div><button className="button demo-button" onClick={enterDemo}>Ver demostración completa <ArrowRight size={17} /></button>
           <p className="security-note"><LockKeyhole size={14} /> Acceso protegido</p>
           <p className="d2-love">Por y para Equipo D2 <Heart size={9} fill="currentColor" /></p>
         </div>

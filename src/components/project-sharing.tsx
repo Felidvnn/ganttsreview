@@ -18,16 +18,26 @@ export function ProjectSharing({ projectId, members, visibility }: { projectId: 
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
+  const runWithFreshSession = async <T,>(operation: () => PromiseLike<{ data: T; error: { message: string } | null }>) => {
+    const supabase = createClient()!;
+    let result = await operation();
+    if (result.error?.message.includes("Solo el creador")) {
+      const refreshed = await supabase.auth.refreshSession();
+      if (!refreshed.error) result = await operation();
+    }
+    return result;
+  };
+
   const saveVisibility = async () => {
     setBusy(true); setMessage(null);
-    const { error } = await createClient()!.rpc("set_project_visibility", { target_project: projectId, next_visibility: selectedVisibility });
+    const { error } = await runWithFreshSession(() => createClient()!.rpc("set_project_visibility", { target_project: projectId, next_visibility: selectedVisibility }));
     if (error) setMessage({ ok: false, text: error.message });
     else { setMessage({ ok: true, text: "Visibilidad actualizada." }); router.refresh(); }
     setBusy(false);
   };
   const share = async (event: React.FormEvent) => {
     event.preventDefault(); setBusy(true); setMessage(null);
-    const { error } = await createClient()!.rpc("share_project_with_email", { target_project: projectId, target_email: email, target_permission: permission });
+    const { error } = await runWithFreshSession(() => createClient()!.rpc("share_project_with_email", { target_project: projectId, target_email: email, target_permission: permission }));
     if (error) setMessage({ ok: false, text: error.message });
     else { setSelectedVisibility("workspace"); setMessage({ ok: true, text: "Acceso colaborativo guardado." }); setEmail(""); router.refresh(); }
     setBusy(false);
@@ -35,7 +45,7 @@ export function ProjectSharing({ projectId, members, visibility }: { projectId: 
   const remove = async (member: Person) => {
     if (!window.confirm(`¿Quitar a ${member.name} de este proyecto?`)) return;
     setBusy(true);
-    const { error } = await createClient()!.rpc("remove_project_collaborator", { target_project: projectId, target_user: member.id });
+    const { error } = await runWithFreshSession(() => createClient()!.rpc("remove_project_collaborator", { target_project: projectId, target_user: member.id }));
     setMessage(error ? { ok: false, text: error.message } : { ok: true, text: "Colaborador eliminado." });
     if (!error) router.refresh();
     setBusy(false);

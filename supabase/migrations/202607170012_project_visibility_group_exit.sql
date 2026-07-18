@@ -347,7 +347,10 @@ begin
   end if;
 
   update public.group_invitations
-  set status = case when accept_invitation then 'accepted' else 'rejected' end,
+  set status = case when accept_invitation
+        then 'accepted'::public.group_invitation_status
+        else 'rejected'::public.group_invitation_status
+      end,
       responded_by = auth.uid(), responded_at = now()
   where id = item.id;
 end;

@@ -26,6 +26,10 @@ Finalmente ejecuta `supabase/migrations/202607170012_project_visibility_group_ex
 
 Luego ejecuta `supabase/migrations/202607170013_safe_group_project_removal.sql`. Esta migración permite cerrar un grupo de una sola persona sin eliminar proyectos, conserva el historial de membresías y exige que el propietario escriba el nombre del proyecto antes de borrarlo. Un colaborador nunca borra el proyecto: solo puede retirar su propio acceso.
 
+Ejecuta después `supabase/migrations/202607170014_group_invitation_switch.sql` para corregir la respuesta de invitaciones, mostrar invitaciones de otros grupos aunque ya pertenezcas a uno y permitir el cambio directo conservando toda la información. Orbit mantiene un solo grupo activo por persona; si el usuario lidera un grupo con integrantes, debe transferir el liderazgo antes del cambio.
+
+Finalmente ejecuta `supabase/migrations/202607170015_leader_team_visibility.sql` para que el inicio del líder muestre en **Equipo** todos los proyectos no privados asociados a su grupo. Los proyectos privados nunca aparecen para el líder y el acceso de equipo es de solo lectura, salvo que el líder también haya sido invitado como editor.
+
 La migración:
 
 - conserva el workspace y los proyectos existentes;

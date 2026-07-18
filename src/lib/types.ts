@@ -13,6 +13,7 @@ export type Person = {
 
 export type Project = {
   id: string;
+  workspaceId?: string;
   createdBy?: string;
   name: string;
   code: string;

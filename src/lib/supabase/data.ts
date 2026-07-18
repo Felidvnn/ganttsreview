@@ -11,7 +11,7 @@ type DbProfile = { id: string; full_name: string; email?: string | null; job_tit
 type DbMember = { user_id: string; permission?: "owner" | "editor" | "viewer"; profiles?: DbProfile | DbProfile[] | null };
 type DbTaskCount = { id: string; status: string; progress: number; due_date: string | null; is_milestone: boolean };
 type DbProject = {
-  id: string; name: string; code: string; description: string; progress: number; health: string;
+  id: string; workspace_id: string; name: string; code: string; description: string; progress: number; health: string;
   due_date: string | null; start_date: string | null; color: string; visibility: string;
   created_by?: string;
   creator?: DbProfile | DbProfile[] | null; project_members?: DbMember[]; tasks?: DbTaskCount[];
@@ -56,7 +56,7 @@ function mapProject(row: DbProject): Project {
   const health: ProjectHealth = hasOverdueTask || projectOverdue || row.health === "delayed" ? "delayed" : row.health === "risk" || expectedProgress - progress >= 10 ? "risk" : "healthy";
   const milestones = projectTasks.filter((task) => task.is_milestone);
   return {
-    id: row.id, createdBy: row.created_by, name: row.name, code: row.code, description: row.description ?? "", progress,
+    id: row.id, workspaceId: row.workspace_id, createdBy: row.created_by, name: row.name, code: row.code, description: row.description ?? "", progress,
     expectedProgress, health, dueLabel: due ? format(due, "dd MMM", { locale: es }) : "Sin fecha",
     dueDate: row.due_date ?? "", startDate: row.start_date ?? "", startLabel: start ? format(start, "dd MMM", { locale: es }) : "Sin fecha",
     color: row.color ?? "#2f7669", members, visibilityKey,

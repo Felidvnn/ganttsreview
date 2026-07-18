@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import type { GroupData, GroupPerson } from "@/lib/supabase/group-data";
+import type { GroupData, GroupInvitation, GroupPerson } from "@/lib/supabase/group-data";
 import { createClient } from "@/lib/supabase/client";
 
 function initials(name: string) {
@@ -43,7 +43,7 @@ export function GroupManager({ data }: { data: GroupData }) {
   }
 
   const supabase = createClient()!;
-  const pendingInvite = !data.group ? data.invitations.find((item) => item.kind === "invitation" && item.subject.id === data.currentUser!.id) : null;
+  const incomingInvitations = data.invitations.filter((item) => item.kind === "invitation" && item.subject.id === data.currentUser!.id);
 
   if (!data.group || !data.membership) {
     const createGroup = (event: React.FormEvent) => {
@@ -58,7 +58,7 @@ export function GroupManager({ data }: { data: GroupData }) {
     return <div className="group-onboarding">
       <section className="page-heading"><span className="eyebrow">TU EQUIPO</span><h2>Crea o únete a un grupo</h2><p>Los proyectos y permisos se organizan alrededor de tu grupo de trabajo.</p></section>
       {message && <div className={`group-message ${message.type}`}>{message.type === "ok" ? <Check /> : <X />}{message.text}</div>}
-      {pendingInvite && <section className="panel pending-invite-card"><span className="metric-icon green"><MailPlus /></span><div><span className="eyebrow">INVITACIÓN PENDIENTE</span><h3>{pendingInvite.initiator.name} te invitó a su grupo</h3><p>{pendingInvite.initiator.email}</p></div><div><button className="button secondary" onClick={() => run(pendingInvite.id, () => supabase.rpc("respond_group_invitation", { target_invitation: pendingInvite.id, accept_invitation: false }), "Invitación rechazada.")}>Rechazar</button><button className="button primary" onClick={() => run(pendingInvite.id, () => supabase.rpc("respond_group_invitation", { target_invitation: pendingInvite.id, accept_invitation: true }), "Ya perteneces al grupo.")}>Aceptar</button></div></section>}
+      {incomingInvitations.map((invitation) => <section className="panel pending-invite-card" key={invitation.id}><span className="metric-icon green"><MailPlus /></span><div><span className="eyebrow">INVITACIÓN PENDIENTE</span><h3>{invitation.initiator.name} te invitó a {invitation.workspace.name}</h3><p>{invitation.initiator.email}</p></div><div><button className="button secondary" disabled={busy === invitation.id} onClick={() => run(invitation.id, () => supabase.rpc("respond_group_invitation", { target_invitation: invitation.id, accept_invitation: false }), "Invitación rechazada.")}>Rechazar</button><button className="button primary" disabled={busy === invitation.id} onClick={() => run(invitation.id, () => supabase.rpc("respond_group_invitation", { target_invitation: invitation.id, accept_invitation: true }), `Ahora perteneces a ${invitation.workspace.name}.`)}>Aceptar</button></div></section>)}
       <div className="group-onboarding-grid">
         <form className="panel onboarding-option" onSubmit={createGroup}><span className="group-option-icon"><Plus /></span><span className="eyebrow">PARA LÍDERES</span><h3>Crear un grupo</h3><p>Crea el espacio de tu equipo e invita a tus ingenieros.</p><label className="field-label">Nombre del grupo<input value={groupName} onChange={(event) => setGroupName(event.target.value)} placeholder="Ej. Ingeniería D2" required /></label><button className="button primary" disabled={busy === "create"}>{busy === "create" ? "Creando..." : "Crear grupo"}</button></form>
         <form className="panel onboarding-option" onSubmit={requestJoin}><span className="group-option-icon secondary"><UserPlus /></span><span className="eyebrow">PARA INGENIEROS</span><h3>Unirme a mi líder</h3><p>Ingresa el correo de tu líder y espera su aprobación.</p><label className="field-label">Correo del líder<input type="email" value={leaderEmail} onChange={(event) => setLeaderEmail(event.target.value)} placeholder="lider@empresa.cl" required /></label><button className="button secondary" disabled={busy === "join"}>{busy === "join" ? "Enviando..." : "Solicitar acceso"}</button></form>
@@ -68,8 +68,8 @@ export function GroupManager({ data }: { data: GroupData }) {
 
   const isLeader = data.membership.role === "leader";
   const isAdmin = data.membership.isAdmin;
-  const activeRequests = data.invitations.filter((item) => item.kind === "join_request");
-  const activeInvites = data.invitations.filter((item) => item.kind === "invitation");
+  const activeRequests = data.invitations.filter((item) => item.kind === "join_request" && item.workspace.id === data.group!.id);
+  const activeInvites = data.invitations.filter((item) => item.kind === "invitation" && item.workspace.id === data.group!.id && item.subject.id !== data.currentUser!.id);
   const invite = (event: React.FormEvent) => {
     event.preventDefault();
     run("invite", () => supabase.rpc("invite_group_member", { target_workspace: data.group!.id, target_email: email }), "Invitación enviada.");
@@ -82,6 +82,7 @@ export function GroupManager({ data }: { data: GroupData }) {
   };
   const engineers = data.members.filter((member) => member.role === "engineer" && member.id !== data.currentUser!.id);
   const isOnlyMember = data.members.length === 1;
+  const externalInvitations = incomingInvitations.filter((item) => item.workspace.id !== data.group!.id);
   const leave = () => {
     if (isLeader && !isOnlyMember && !successorId) { setMessage({ type: "error", text: "Selecciona a un ingeniero para transferir el liderazgo." }); return; }
     const prompt = isLeader && isOnlyMember
@@ -96,10 +97,26 @@ export function GroupManager({ data }: { data: GroupData }) {
       isLeader && isOnlyMember ? "El grupo se cerró. Toda tu información se conservó." : "Saliste del grupo sin eliminar información.",
     );
   };
+  const switchGroup = (invitation: GroupInvitation) => {
+    if (isLeader && !isOnlyMember && !successorId) {
+      setMessage({ type: "error", text: "Selecciona quién quedará como líder antes de cambiar de grupo." });
+      return;
+    }
+    const prompt = isLeader && isOnlyMember
+      ? `¿Cerrar ${data.group!.name} y cambiarte a ${invitation.workspace.name}? Tus proyectos se conservarán.`
+      : `¿Salir de ${data.group!.name} y cambiarte a ${invitation.workspace.name}? Ningún proyecto será eliminado.`;
+    if (!window.confirm(prompt)) return;
+    run(invitation.id, () => supabase.rpc("switch_group_from_invitation", {
+      target_invitation: invitation.id,
+      target_successor: isLeader && !isOnlyMember ? successorId : null,
+    }), `Ahora perteneces a ${invitation.workspace.name}.`);
+  };
 
   return <>
     <section className="page-heading inline-heading group-heading"><div><span className="eyebrow">GRUPO DE TRABAJO</span><h2>{data.group.name}</h2><p>{data.members.length} integrantes · Tú eres {isLeader ? "líder" : "ingeniero"}{isAdmin && !isLeader ? " y administrador" : ""}</p></div><button className="button secondary" onClick={() => navigator.clipboard.writeText(data.group!.name)}><Copy size={16} /> Copiar nombre</button></section>
     {message && <div className={`group-message ${message.type}`}>{message.type === "ok" ? <Check /> : <X />}{message.text}</div>}
+
+    {externalInvitations.map((invitation) => <section className="panel pending-invite-card group-switch-invite" key={invitation.id}><span className="metric-icon green"><MailPlus /></span><div><span className="eyebrow">TE INVITARON A OTRO GRUPO</span><h3>{invitation.workspace.name}</h3><p>{invitation.initiator.name} · {invitation.initiator.email}</p></div><div className="group-switch-actions">{isLeader && !isOnlyMember && <select value={successorId} onChange={(event) => setSuccessorId(event.target.value)}><option value="">Nuevo líder de {data.group!.name}</option>{engineers.map((member) => <option value={member.id} key={member.id}>{member.name}</option>)}</select>}<button className="button secondary" disabled={busy === invitation.id} onClick={() => run(invitation.id, () => supabase.rpc("respond_group_invitation", { target_invitation: invitation.id, accept_invitation: false }), "Invitación rechazada.")}>Rechazar</button><button className="button primary" disabled={busy === invitation.id} onClick={() => switchGroup(invitation)}>{isLeader && isOnlyMember ? "Cerrar grupo y cambiar" : "Cambiar a este grupo"}</button></div></section>)}
 
     <section className="group-summary-grid">
       <article className="panel group-stat"><span className="metric-icon green"><Users /></span><div><small>INTEGRANTES</small><b>{data.members.length}</b><p>{data.members.filter((member) => member.role === "engineer").length} ingenieros</p></div></article>

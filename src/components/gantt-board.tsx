@@ -2,7 +2,7 @@
 
 import {
   AlertTriangle, CalendarRange, Check, ChevronDown, ChevronLeft, ChevronRight, CornerDownRight,
-  Columns3, Link2, Maximize2, Minimize2, Plus, X, ZoomIn, ZoomOut,
+  Columns3, Link2, Maximize2, Minimize2, Plus, Presentation, X,
 } from "lucide-react";
 import { addDays, differenceInCalendarDays, format, startOfWeek } from "date-fns";
 import { es } from "date-fns/locale";
@@ -46,7 +46,6 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [hierarchyDrag, setHierarchyDrag] = useState<string | null>(null);
   const [hierarchyTarget, setHierarchyTarget] = useState<string | null>(null);
-  const [zoom, setZoom] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
   const [createKind, setCreateKind] = useState<"task" | "milestone">("task");
   const [createError, setCreateError] = useState("");
@@ -68,6 +67,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   const [sectionError, setSectionError] = useState("");
   const [sectionSaving, setSectionSaving] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [simpleView, setSimpleView] = useState(false);
   const shellRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const columnResizeRef = useRef<ColumnResizeState | null>(null);
@@ -129,7 +129,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   const startColumnResize = (event: React.PointerEvent<HTMLButtonElement>, column: ColumnKey, min: number, max: number) => {
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    columnResizeRef.current = { column, startX: event.clientX, startWidth: columnWidths[column], min, max, scale: column === "task" ? zoom : 1 };
+    columnResizeRef.current = { column, startX: event.clientX, startWidth: columnWidths[column], min, max, scale: 1 };
   };
 
   const moveColumnResize = (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -429,8 +429,8 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   const hierarchyLabel = (task: Task) => taskDepth(task, items) === 2 ? "Sub-subtarea" : taskDepth(task, items) === 1 ? "Subtarea" : "";
   const dayLabelEvery = rangeDays <= 30 ? 1 : rangeDays <= 60 ? 2 : rangeDays <= 90 ? 3 : 7;
   const visibleColumnOrder: ColumnKey[] = ["task", "owner", "status", "priority", "progress", "startDate", "dueDate"];
-  const gridTemplateColumns = `${visibleColumnOrder.filter((column) => visibleColumns[column]).map((column) => `${columnWidths[column] * (column === "task" ? zoom : 1)}px`).join(" ")} minmax(565px, 1fr)`;
-  const informationWidth = visibleColumnOrder.filter((column) => visibleColumns[column]).reduce((sum, column) => sum + columnWidths[column] * (column === "task" ? zoom : 1), 0);
+  const gridTemplateColumns = `${visibleColumnOrder.filter((column) => visibleColumns[column]).map((column) => `${columnWidths[column]}px`).join(" ")} minmax(565px, 1fr)`;
+  const informationWidth = visibleColumnOrder.filter((column) => visibleColumns[column]).reduce((sum, column) => sum + columnWidths[column], 0);
   const gridStyle = { gridTemplateColumns } as React.CSSProperties;
   const prettyDate = (value?: string) => value ? format(new Date(`${value}T12:00:00`), "dd MMM yy", { locale: es }) : "Sin fecha";
   const columnOptions: { key: ColumnKey; label: string }[] = [
@@ -439,13 +439,46 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   ];
 
   return (
-    <div className="gantt-shell" ref={shellRef}>
+    <div className={`gantt-shell ${readOnly ? "gantt-readonly" : ""}`} ref={shellRef}>
       <div className="gantt-toolbar">
         <div className="gantt-date-controls"><button className="icon-button period-button" onClick={() => setWindowStart((date) => addDays(date, -Math.ceil(rangeDays / 2)))} aria-label="Periodo anterior"><ChevronLeft size={17} /></button><button className="today-button" onClick={() => setWindowStart(startOfWeek(new Date(), { weekStartsOn: 1 }))}>Hoy</button><button className="icon-button period-button" onClick={() => setWindowStart((date) => addDays(date, Math.ceil(rangeDays / 2)))} aria-label="Periodo siguiente"><ChevronRight size={17} /></button><label className="range-select"><CalendarRange size={15} /><select value={rangeDays} onChange={(event) => setRangeDays(Number(event.target.value))}><option value={28}>4 semanas</option><option value={56}>8 semanas</option><option value={84}>12 semanas</option><option value={182}>26 semanas</option></select></label></div>
-        <div><span className="wheel-hint">Shift + rueda para navegar</span><button className="icon-button zoom-button" onClick={() => setZoom(Math.max(.85, zoom - .1))} aria-label="Alejar"><ZoomOut size={17} /></button><span className="zoom-value">{Math.round(zoom * 100)}%</span><button className="icon-button zoom-button" onClick={() => setZoom(Math.min(1.25, zoom + .1))} aria-label="Acercar"><ZoomIn size={17} /></button><div className="column-visibility"><button type="button" className={`icon-button ${columnsOpen ? "active" : ""}`} onClick={() => setColumnsOpen((current) => !current)} aria-label="Mostrar u ocultar columnas" title="Columnas"><Columns3 size={17} /></button>{columnsOpen && <div className="column-visibility-menu"><header><b>Columnas visibles</b><span>Personaliza esta vista</span></header>{columnOptions.map((option) => <label key={option.key}><input type="checkbox" checked={visibleColumns[option.key]} onChange={() => toggleColumn(option.key)} /><span>{option.label}</span><i /></label>)}</div>}</div><button className="icon-button fullscreen-button" onClick={toggleFullscreen} aria-label={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}>{isFullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button>{!readOnly && <><button className="button secondary small section-button" onClick={() => { setSectionError(""); setSectionOpen(true); }}><Plus size={15} /> Sección</button><button className="button primary small" onClick={openTaskCreator}><Plus size={16} /> Agregar tarea/hito</button></>}</div>
+        <div className="gantt-toolbar-actions">{!simpleView && <><span className="wheel-hint">Shift + rueda para navegar</span><div className="column-visibility"><button type="button" className={`button secondary small columns-button ${columnsOpen ? "active" : ""}`} onClick={() => setColumnsOpen((current) => !current)} aria-label="Mostrar u ocultar columnas"><Columns3 size={15} /> Columnas</button>{columnsOpen && <div className="column-visibility-menu"><header><b>Columnas visibles</b><span>Personaliza esta vista</span></header>{columnOptions.map((option) => <label key={option.key}><input type="checkbox" checked={visibleColumns[option.key]} onChange={() => toggleColumn(option.key)} /><span>{option.label}</span><i /></label>)}</div>}</div></>}<button className={`button secondary small simple-view-button ${simpleView ? "active" : ""}`} onClick={() => setSimpleView((current) => !current)}><Presentation size={15} />{simpleView ? "Vista completa" : "Vista simple"}</button>{!simpleView && !readOnly && <><button className="button secondary small section-button" onClick={() => { setSectionError(""); setSectionOpen(true); }}><Plus size={15} /> Sección</button><button className="button primary small" onClick={openTaskCreator}><Plus size={16} /> Agregar tarea/hito</button></>}<button className="icon-button fullscreen-button" onClick={toggleFullscreen} aria-label={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"} title={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}>{isFullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button></div>
       </div>
       {interactionError && <div className="gantt-message"><AlertTriangle size={14} />{interactionError}<button onClick={() => setInteractionError("")}><X size={14} /></button></div>}
-      <div className="gantt-desktop" style={{ "--zoom": zoom, "--day-size": `${100 / rangeDays}%`, "--segment-count": timelineSegments.length, minWidth: `${informationWidth + 565}px` } as React.CSSProperties} onWheel={navigateWheel}>
+      {simpleView && <div className="gantt-simple-scroll" onWheel={navigateWheel}>
+        <div className="gantt-simple-stage" style={{ "--day-size": `${100 / rangeDays}%` } as React.CSSProperties}>
+          <div className="gantt-simple-head">
+            <div><span>CRONOGRAMA</span><b>Vista de presentación</b></div>
+            <div className="gantt-simple-calendar">
+              <div className="gantt-weeks" style={{ gridTemplateColumns: `repeat(${timelineSegments.length}, 1fr)` }}>{timelineSegments.map((segment, index) => <span key={`${segment}-${index}`}>{segment}</span>)}</div>
+              <div className="gantt-days" style={{ gridTemplateColumns: `repeat(${rangeDays}, 1fr)` }}>{timelineDays.map((day, index) => <span className={dateValue(day) === todayKey ? "today" : ""} key={day.toISOString()}>{index % dayLabelEvery === 0 ? format(day, "d") : ""}</span>)}</div>
+            </div>
+          </div>
+          {sections.filter((section) => allTasksInSection(section).length > 0).map((section) => <section className="gantt-simple-section" key={section}>
+            <header><b>{section}</b><span>{allTasksInSection(section).length} actividades</span></header>
+            {allTasksInSection(section).map((task) => {
+              const depth = taskDepth(task, items);
+              const offset = taskOffset(task);
+              const width = taskWidth(task);
+              const inRange = offset + width > 0 && offset < rangeDays;
+              const visibleStart = Math.max(0, offset);
+              const clippedStart = Math.max(0, -offset);
+              const visibleWidth = Math.max(1, Math.min(rangeDays - visibleStart, width - clippedStart));
+              return <div className={`gantt-simple-row depth-${depth}`} key={task.id}>
+                <div className="gantt-simple-copy" style={{ paddingLeft: `${15 + depth * 20}px` }}>
+                  {depth > 0 ? <CornerDownRight size={13} /> : <i style={{ background: taskDisplayColor(task, colorMode) }} />}
+                  <span><b>{task.title}</b><small>{task.owner.name} · {task.progress}%</small></span>
+                </div>
+                <div className="gantt-simple-track">
+                  {inRange && <i className={task.isMilestone ? "milestone" : ""} style={{ left: `${visibleStart / rangeDays * 100}%`, width: task.isMilestone ? "14px" : `${visibleWidth / rangeDays * 100}%`, background: taskDisplayColor(task, colorMode) }}><em style={{ width: `${task.progress}%` }} /></i>}
+                </div>
+              </div>;
+            })}
+          </section>)}
+          {!items.length && <div className="gantt-empty"><Check size={18} /><b>Aún no hay tareas</b><span>Agrega planificación para preparar esta vista de presentación.</span></div>}
+        </div>
+      </div>}
+      {!simpleView && <div className="gantt-desktop" style={{ "--day-size": `${100 / rangeDays}%`, "--segment-count": timelineSegments.length, minWidth: `${informationWidth + 565}px` } as React.CSSProperties} onWheel={navigateWheel}>
         <div className="gantt-grid gantt-header-row" style={gridStyle}><div className="gantt-task-head">TAREA{columnResizer("task", 180, 430)}</div>{visibleColumns.owner && <div className="gantt-owner-head">RESPONSABLE{columnResizer("owner", 90, 240)}</div>}{visibleColumns.status && <div className="gantt-status-head">ESTADO{columnResizer("status", 75, 180)}</div>}{visibleColumns.priority && <div className="gantt-priority-head">PRIORIDAD{columnResizer("priority", 65, 140)}</div>}{visibleColumns.progress && <div className="gantt-progress-head">AVANCE{columnResizer("progress", 65, 150)}</div>}{visibleColumns.startDate && <div className="gantt-date-head">INICIO{columnResizer("startDate", 78, 150)}</div>}{visibleColumns.dueDate && <div className="gantt-date-head">FIN{columnResizer("dueDate", 78, 150)}</div>}<div className="gantt-timeline-head"><div className="gantt-weeks" style={{ gridTemplateColumns: `repeat(${timelineSegments.length}, 1fr)` }}>{timelineSegments.map((segment, index) => <span key={`${segment}-${index}`}>{segment}</span>)}</div><div className="gantt-days" style={{ gridTemplateColumns: `repeat(${rangeDays}, 1fr)` }}>{timelineDays.map((day, index) => <span className={dateValue(day) === todayKey ? "today" : ""} key={day.toISOString()}>{index % dayLabelEvery === 0 ? format(day, "d") : ""}</span>)}</div></div></div>
         <div className="gantt-body">
           {todayOffset >= 0 && todayOffset < rangeDays && <div className="today-line" style={{ left: `calc(${informationWidth}px + (100% - ${informationWidth}px) * ${todayOffset / rangeDays})` }} />}
@@ -462,7 +495,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
                 const rememberedExternal = task.manualAssignee ? members.find((member) => member.user_id.startsWith("external:") && member.full_name.toLowerCase() === task.manualAssignee?.toLowerCase()) : undefined;
                 return <div data-task-drop={task.id} className={`gantt-grid gantt-task-row ${hierarchyTarget === task.id ? "hierarchy-drop-target" : ""} ${hierarchyDrag === task.id ? "hierarchy-dragging" : ""}`} key={task.id} style={gridStyle} onDragOver={(event) => { if (!hierarchyDrag || hierarchyDrag === task.id) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setHierarchyTarget(task.id); }} onDragLeave={() => setHierarchyTarget((current) => current === task.id ? null : current)} onDrop={(event) => dropOnTask(event, task.id)}>
                   <div className={`gantt-task-name task-depth-${depth}`} draggable={!readOnly} onDragStart={(event) => startHierarchyDrag(event, task.id)} onDragEnd={() => { setHierarchyDrag(null); setHierarchyTarget(null); }} title={readOnly ? undefined : "Arrastra para convertirla en subtarea o moverla a una sección"}>
-                    <button className={`tiny-check ${task.status === "done" ? "checked" : ""}`} onClick={() => updatePresentation(task.id, task.status === "done" ? "todo" : "done", task.color || colors[0])}>{task.status === "done" && <Check size={12} />}</button>
+                    <button className={`tiny-check ${task.status === "done" ? "checked" : ""}`} disabled={readOnly} onClick={() => updatePresentation(task.id, task.status === "done" ? "todo" : "done", task.color || colors[0])} title={readOnly ? "Estado visible en modo de consulta" : "Marcar como completada"}>{task.status === "done" && <Check size={12} />}</button>
                     <span className="task-tree-control">{taskHasChildren ? <button type="button" className={`hierarchy-toggle ${depth > 0 ? "hierarchy-branch" : "hierarchy-root"} ${collapsedParents.includes(task.id) ? "collapsed" : ""}`} onClick={() => setCollapsedParents((current) => current.includes(task.id) ? current.filter((id) => id !== task.id) : [...current, task.id])} title={collapsedParents.includes(task.id) ? "Mostrar subtareas" : "Ocultar subtareas"} aria-label={collapsedParents.includes(task.id) ? "Mostrar subtareas" : "Ocultar subtareas"}>{depth > 0 ? <CornerDownRight size={13} /> : <span className="root-chevron" />}</button> : depth > 0 ? <CornerDownRight className="subtask-arrow" size={13} /> : <span className="hierarchy-spacer" />}</span>
                     <span><span className="task-title-line"><button type="button" className="task-open-button" onClick={() => openTask(task)}>{task.title}</button></span>{(hierarchyLabel(task) || task.isMilestone) && <small>{hierarchyLabel(task) && <em>{hierarchyLabel(task)}</em>}{task.isMilestone && "Hito"}</small>}</span>
                     {!readOnly && colorMode === "manual" && <input className="task-color-input" type="color" value={task.color || colors[0]} onChange={(event) => setItems((current) => current.map((item) => item.id === task.id ? { ...item, color: event.target.value } : item))} onBlur={(event) => updatePresentation(task.id, task.status, event.target.value)} title="Color de la tarea" />}
@@ -480,22 +513,22 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
           ))}
           {!items.length && <div className="gantt-empty"><Check size={18} /><b>Aún no hay tareas</b><span>{readOnly ? "Este proyecto todavía no tiene planificación." : "Agrega una tarea o hito dentro de cualquiera de las secciones."}</span></div>}
         </div>
-      </div>
+      </div>}
 
-      <div className="gantt-mobile">
+      {!simpleView && <div className="gantt-mobile">
         <div className="mobile-timeline-key"><span><i className="key-done" />Completada</span><span><i className="key-progress" />En curso</span><span><i className="key-blocked" />Bloqueada</span></div>
         {visible.map((task) => {
           const taskHasChildren = hasChildren(task);
           const depth = taskDepth(task, items);
           return <article className={`mobile-task-card mobile-depth-${depth}`} key={task.id} style={{ borderLeftColor: taskDisplayColor(task, colorMode) }}>
-            <div><button className={`tiny-check ${task.status === "done" ? "checked" : ""}`} onClick={() => updatePresentation(task.id, task.status === "done" ? "todo" : "done", task.color || colors[0])}>{task.status === "done" && <Check size={12} />}</button><span className="task-tree-control">{taskHasChildren ? <button type="button" className={`hierarchy-toggle ${depth > 0 ? "hierarchy-branch" : "hierarchy-root"} ${collapsedParents.includes(task.id) ? "collapsed" : ""}`} onClick={() => setCollapsedParents((current) => current.includes(task.id) ? current.filter((id) => id !== task.id) : [...current, task.id])}>{depth > 0 ? <CornerDownRight size={13} /> : <span className="root-chevron" />}</button> : depth > 0 ? <CornerDownRight className="subtask-arrow" size={13} /> : <span className="hierarchy-spacer" />}</span><span><span className="task-title-line"><button type="button" className="task-open-button" onClick={() => openTask(task)}>{task.title}</button></span>{(hierarchyLabel(task) || task.isMilestone) && <small>{hierarchyLabel(task) || "Hito"}</small>}</span><span className="mobile-owner-compact">{task.owner.name}</span></div>
+            <div><button className={`tiny-check ${task.status === "done" ? "checked" : ""}`} disabled={readOnly} onClick={() => updatePresentation(task.id, task.status === "done" ? "todo" : "done", task.color || colors[0])}>{task.status === "done" && <Check size={12} />}</button><span className="task-tree-control">{taskHasChildren ? <button type="button" className={`hierarchy-toggle ${depth > 0 ? "hierarchy-branch" : "hierarchy-root"} ${collapsedParents.includes(task.id) ? "collapsed" : ""}`} onClick={() => setCollapsedParents((current) => current.includes(task.id) ? current.filter((id) => id !== task.id) : [...current, task.id])}>{depth > 0 ? <CornerDownRight size={13} /> : <span className="root-chevron" />}</button> : depth > 0 ? <CornerDownRight className="subtask-arrow" size={13} /> : <span className="hierarchy-spacer" />}</span><span><span className="task-title-line"><button type="button" className="task-open-button" onClick={() => openTask(task)}>{task.title}</button></span>{(hierarchyLabel(task) || task.isMilestone) && <small>{hierarchyLabel(task) || "Hito"}</small>}</span><span className="mobile-owner-compact">{task.owner.name}</span></div>
             <div className="mobile-task-progress"><span><i style={{ width: `${task.progress}%`, background: taskDisplayColor(task, colorMode) }} /></span><b>{task.progress}%</b></div>
             <div className="mobile-task-foot"><span>{task.isMilestone ? <span className="milestone-label">Hito</span> : <TaskBadge status={task.status} label={projectStatuses.find((item) => item.status === task.status)?.label} color={projectStatuses.find((item) => item.status === task.status)?.color} />}</span><i className={`task-priority priority-${task.priority === 3 ? "alta" : task.priority === 1 ? "baja" : "media"}`}>{task.priority === 3 ? "Alta" : task.priority === 1 ? "Baja" : "Media"}</i>{task.blockedBy && <span className="dependency-note"><Link2 size={12} /> {task.blockedBy}</span>}</div>
           </article>;
         })}
         {!visible.length && <div className="gantt-empty"><Check size={18} /><b>Aún no hay tareas visibles</b><span>{items.length ? "Expande una tarea o sección para ver sus subtareas." : readOnly ? "Este proyecto todavía no tiene planificación." : "Agrega la primera tarea para comenzar."}</span></div>}
-      </div>
-      {!readOnly && <button className="gantt-add-bottom" onClick={openTaskCreator}><Plus size={16} /> Agregar tarea/hito</button>}
+      </div>}
+      {!simpleView && !readOnly && <button className="gantt-add-bottom" onClick={openTaskCreator}><Plus size={16} /> Agregar tarea/hito</button>}
 
       {createOpen && <div className="modal-layer" role="dialog" aria-modal="true" aria-label={createKind === "milestone" ? "Nuevo hito" : "Nueva tarea"}><button className="modal-backdrop" onClick={() => setCreateOpen(false)} /><section className="modal-card task-create-modal"><div className="modal-head"><div><span className="eyebrow">PLANIFICACIÓN</span><h2>{createKind === "milestone" ? "Nuevo hito" : "Nueva tarea"}</h2></div><button className="icon-button" onClick={() => setCreateOpen(false)}><X size={19} /></button></div><form onSubmit={createTask}><div className="task-kind-switch"><button type="button" className={createKind === "task" ? "active" : ""} onClick={() => setCreateKind("task")}>Tarea</button><button type="button" className={createKind === "milestone" ? "active" : ""} onClick={() => setCreateKind("milestone")}>Hito</button></div><label className="field-label">Nombre<input name="title" autoFocus placeholder={createKind === "milestone" ? "Ej. Aprobación de ingeniería" : "Ej. Revisar ingeniería de detalle"} required /></label><div className="form-grid"><label className="field-label">Sección<div className="section-select-row"><select value={taskSection} onChange={(event) => setTaskSection(event.target.value)}>{sections.map((section) => <option value={section} key={section}>{section}</option>)}</select><button type="button" className="icon-button" onClick={() => { setSectionError(""); setSectionOpen(true); }} title="Agregar sección"><Plus size={17} /></button></div></label><label className="field-label">Estado<select value={taskStatus} onChange={(event) => setTaskStatus(event.target.value as TaskStatus)}>{statuses.map((status) => <option value={status.value} key={status.value}>{status.label}</option>)}</select></label></div><div className="form-grid">{createKind === "task" && <label className="field-label">Inicio<input name="start_date" type="date" /></label>}<label className="field-label">{createKind === "milestone" ? "Fecha del hito" : "Fecha límite"}<input name="due_date" type="date" /></label></div><label className="field-label">Responsable<select value={assigneeChoice} onChange={(event) => setAssigneeChoice(event.target.value)}><option value="">Sin asignar</option>{members.map((member) => <option value={member.user_id} key={member.user_id}>{member.full_name}{member.user_id.startsWith("external:") ? " · Externo" : ""}</option>)}<option value="__manual__">Otro nombre (externo o ficticio)…</option></select></label>{assigneeChoice === "__manual__" && <label className="field-label">Nombre del responsable<input value={manualAssignee} onChange={(event) => setManualAssignee(event.target.value)} placeholder="Ej. Contratista eléctrico" required /></label>}<label className="field-label">Prioridad<select value={taskPriority} onChange={(event) => setTaskPriority(Number(event.target.value) as 1 | 2 | 3)}><option value={1}>Baja</option><option value={2}>Media</option><option value={3}>Alta</option></select></label><div className="task-color-picker"><span>Color</span><div>{colors.map((color) => <button type="button" key={color} className={taskColor === color ? "selected" : ""} style={{ background: color }} onClick={() => setTaskColor(color)} aria-label={`Usar color ${color}`} />)}<label title="Color personalizado"><input type="color" value={taskColor} onChange={(event) => setTaskColor(event.target.value)} /></label></div></div>{createError && <p className="form-error">{createError}</p>}<div className="modal-actions"><button type="button" className="button secondary" onClick={() => setCreateOpen(false)}>Cancelar</button><button className="button primary" disabled={creating}>{creating ? "Creando..." : `Crear ${createKind === "milestone" ? "hito" : "tarea"}`}</button></div></form></section></div>}
       {sectionOpen && <div className="modal-layer nested-modal" role="dialog" aria-modal="true" aria-label="Nueva sección"><button className="modal-backdrop" onClick={() => setSectionOpen(false)} /><section className="modal-card section-modal"><div className="modal-head"><div><span className="eyebrow">ESTRUCTURA</span><h2>Nueva sección</h2></div><button className="icon-button" onClick={() => setSectionOpen(false)}><X size={19} /></button></div><label className="field-label">Nombre<input autoFocus value={sectionDraft} onChange={(event) => setSectionDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addProjectSection(); } }} placeholder="Ej. Ingeniería, Compras o Puesta en marcha" /></label>{sectionError && <p className="form-error">{sectionError}</p>}<div className="modal-actions"><button type="button" className="button secondary" onClick={() => setSectionOpen(false)}>Cancelar</button><button type="button" className="button primary" disabled={sectionSaving || !sectionDraft.trim()} onClick={addProjectSection}>{sectionSaving ? "Guardando..." : "Agregar sección"}</button></div></section></div>}

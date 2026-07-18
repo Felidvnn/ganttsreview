@@ -18,6 +18,7 @@ export type GroupInvitation = {
   kind: "invitation" | "join_request";
   status: "pending" | "accepted" | "rejected" | "cancelled";
   createdAt: string;
+  workspace: { id: string; name: string };
   subject: { id: string; name: string; email: string };
   initiator: { id: string; name: string; email: string };
 };
@@ -86,12 +87,12 @@ export const getGroupData = cache(async (): Promise<GroupData> => {
     : Promise.resolve({ data: [] });
 
   const invitationQuery = supabase.from("group_invitations")
-    .select("id,kind,status,created_at,subject:profiles!group_invitations_subject_user_id_fkey(id,full_name,email),initiator:profiles!group_invitations_initiated_by_fkey(id,full_name,email)")
+    .select("id,kind,status,created_at,workspace:workspaces!group_invitations_workspace_id_fkey(id,name),subject:profiles!group_invitations_subject_user_id_fkey(id,full_name,email),initiator:profiles!group_invitations_initiated_by_fkey(id,full_name,email)")
     .eq("status", "pending").order("created_at", { ascending: false });
 
   const [membersResult, invitationsResult] = await Promise.all([
     membersQuery,
-    group ? invitationQuery.eq("workspace_id", group.id) : invitationQuery.eq("subject_user_id", user.id),
+    group ? invitationQuery.or(`workspace_id.eq.${group.id},subject_user_id.eq.${user.id}`) : invitationQuery.eq("subject_user_id", user.id),
   ]);
 
   const members: GroupPerson[] = (membersResult.data ?? []).map((row) => {
@@ -110,11 +111,13 @@ export const getGroupData = cache(async (): Promise<GroupData> => {
   const invitations: GroupInvitation[] = (invitationsResult.data ?? []).map((row) => {
     const subject = one(row.subject as unknown as JoinedProfile | JoinedProfile[] | null);
     const initiator = one(row.initiator as unknown as JoinedProfile | JoinedProfile[] | null);
+    const invitationWorkspace = one(row.workspace as unknown as { id: string; name: string } | { id: string; name: string }[] | null);
     return {
       id: row.id,
       kind: row.kind as GroupInvitation["kind"],
       status: row.status as GroupInvitation["status"],
       createdAt: row.created_at,
+      workspace: { id: invitationWorkspace?.id ?? "", name: invitationWorkspace?.name || "Grupo invitante" },
       subject: { id: subject?.id ?? "", name: subject?.full_name || subject?.email?.split("@")[0] || "Integrante", email: subject?.email || "" },
       initiator: { id: initiator?.id ?? "", name: initiator?.full_name || initiator?.email?.split("@")[0] || "Integrante", email: initiator?.email || "" },
     };
@@ -135,7 +138,7 @@ export const getShellContext = cache(async () => {
   // and all pending invitations on every page transition.
   const weekStart = format(startOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd");
   const weekEnd = format(endOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd");
-  const [membershipResult, personalResult, tasksResult, followupsResult] = await Promise.all([
+  const [membershipResult, personalResult, tasksResult, followupsResult, invitationsResult] = await Promise.all([
     supabase.from("workspace_members")
       .select("workspace_id,role,is_admin,profiles!workspace_members_user_id_fkey(full_name),workspaces!workspace_members_workspace_id_fkey(name)")
       .eq("user_id", user.id).order("joined_at").limit(1).maybeSingle(),
@@ -148,6 +151,12 @@ export const getShellContext = cache(async () => {
     supabase.from("project_followups")
       .select("id", { count: "exact", head: true })
       .neq("status", "done").not("due_date", "is", null).lte("due_date", weekEnd),
+    supabase.from("group_invitations")
+      .select("id", { count: "exact", head: true })
+      .eq("subject_user_id", user.id)
+      .eq("kind", "invitation")
+      .eq("status", "pending")
+      .gte("expires_at", new Date().toISOString()),
   ]);
   const membershipRow = membershipResult.data;
 
@@ -159,10 +168,34 @@ export const getShellContext = cache(async () => {
     id: user.id,
     name,
     initials,
+    workspaceId: membershipRow?.workspace_id ?? null,
     hasGroup: Boolean(membershipRow?.workspace_id),
     role: (membershipRow?.role ?? "engineer") as "leader" | "engineer",
     isAdmin: Boolean(membershipRow?.is_admin || membershipRow?.role === "leader"),
     groupName: workspace?.name ?? "Sin grupo",
     weekPendingCount: (personalResult.count ?? 0) + (tasksResult.count ?? 0) + (followupsResult.count ?? 0),
+    groupInvitationCount: invitationsResult.count ?? 0,
   };
 });
+
+export async function getTeamRoster(workspaceId: string | null) {
+  if (!workspaceId) return [] as Array<{ id: string; name: string; initials: string; color: string; role: "leader" | "engineer" }>;
+  const supabase = await createServerSupabaseClient();
+  if (!supabase) return [];
+  const { data } = await supabase.from("workspace_members")
+    .select("user_id,role,profiles!workspace_members_user_id_fkey(full_name)")
+    .eq("workspace_id", workspaceId)
+    .order("joined_at");
+  const colors = ["#2f7669", "#5278a3", "#8a6cab", "#b27048", "#557f78", "#9b6a52"];
+  return (data ?? []).map((row, index) => {
+    const profile = one(row.profiles as unknown as { full_name: string } | { full_name: string }[] | null);
+    const name = profile?.full_name || "Integrante";
+    return {
+      id: row.user_id,
+      name,
+      initials: name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "?",
+      color: colors[index % colors.length],
+      role: row.role as "leader" | "engineer",
+    };
+  });
+}

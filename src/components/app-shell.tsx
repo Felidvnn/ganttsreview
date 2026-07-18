@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BriefcaseBusiness, CalendarCheck2, ChartNoAxesCombined,
-  CircleHelp, Heart, LayoutDashboard, LogOut, Menu, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, Users, X,
+  BriefcaseBusiness, CalendarCheck2, CalendarDays, ChartNoAxesCombined,
+  Bell, CircleHelp, Heart, LayoutDashboard, LogOut, Menu, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, Users, X,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -17,19 +17,20 @@ import { QuickCreate } from "./quick-create";
 const nav = [
   { href: "/dashboard", label: "Inicio", icon: LayoutDashboard },
   { href: "/projects", label: "Proyectos", icon: BriefcaseBusiness },
+  { href: "/calendar", label: "Calendario", icon: CalendarDays },
   { href: "/portfolio", label: "Portafolio", icon: ChartNoAxesCombined, leader: true },
   { href: "/week", label: "Seguimiento", icon: CalendarCheck2 },
   { href: "/team", label: "Grupo", icon: Users },
 ];
 
 const titles: Record<string, string> = {
-  "/dashboard": "Inicio", "/projects": "Proyectos", "/portfolio": "Portafolio",
+  "/dashboard": "Inicio", "/projects": "Proyectos", "/portfolio": "Portafolio", "/calendar": "Calendario",
   "/week": "Seguimiento", "/team": "Grupo", "/settings": "Configuración",
 };
 
 type ShellContext = {
   id: string; name: string; initials: string; role: "leader" | "engineer";
-  hasGroup: boolean; isAdmin: boolean; groupName: string; weekPendingCount: number;
+  workspaceId: string | null; hasGroup: boolean; isAdmin: boolean; groupName: string; weekPendingCount: number; groupInvitationCount: number;
 } | null;
 
 export function AppShell({ children, shell }: { children: React.ReactNode; shell: ShellContext }) {
@@ -87,6 +88,7 @@ export function AppShell({ children, shell }: { children: React.ReactNode; shell
                 <Icon size={19} strokeWidth={1.8} /><span>{label}</span>
                 {leader && <span className="leader-dot" title="Solo líderes" />}
                 {href === "/week" && weekPendingCount > 0 && <span className="nav-badge">{weekPendingCount}</span>}
+                {href === "/team" && (shell?.groupInvitationCount ?? 0) > 0 && <span className="nav-badge">{shell!.groupInvitationCount}</span>}
               </Link>
             );
           })}
@@ -117,6 +119,7 @@ export function AppShell({ children, shell }: { children: React.ReactNode; shell
               <input aria-label="Buscar" placeholder="Buscar proyectos, tareas..." disabled />
               <kbd>⌘ K</kbd>
             </button>
+            <Link href="/team" className="icon-button notification-button" aria-label={(shell?.groupInvitationCount ?? 0) > 0 ? `${shell!.groupInvitationCount} invitaciones de grupo pendientes` : "Sin invitaciones de grupo pendientes"} title={(shell?.groupInvitationCount ?? 0) > 0 ? "Ver invitaciones de grupo" : "Sin invitaciones pendientes"}><Bell size={18} />{(shell?.groupInvitationCount ?? 0) > 0 && <i />}</Link>
             <Link href="/settings" className="top-avatar" aria-label="Abrir perfil"><Avatar person={profile} size="sm" /></Link>
           </div>
         </header>
@@ -124,7 +127,7 @@ export function AppShell({ children, shell }: { children: React.ReactNode; shell
       </main>
 
       <nav className="mobile-tabs" aria-label="Navegación móvil">
-        {visibleNav.slice(0, 4).map(({ href, label, icon: Icon }) => (
+        {visibleNav.filter((item) => ["/dashboard", "/projects", "/calendar", "/week"].includes(item.href)).map(({ href, label, icon: Icon }) => (
           <Link key={href} href={href} className={pathname === href || (href === "/projects" && pathname.startsWith("/projects/")) ? "active" : ""}>
             <Icon size={21} /><span>{label}</span>
           </Link>
