@@ -61,6 +61,9 @@ export type Task = {
   assigneeIds?: string[];
   directoryAssigneeIds?: string[];
   manualAssignee?: string;
+  taskTypeId?: string;
+  taskTypeName?: string;
+  taskTypeColor?: string;
   overdue?: boolean;
   blockedBy?: string;
   section: string;

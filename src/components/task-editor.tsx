@@ -6,6 +6,7 @@ import { es } from "date-fns/locale";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Person, Task, TaskDependency, TaskStatus } from "@/lib/types";
 import { defaultProjectStatuses, type ProjectTaskStatus } from "@/lib/task-statuses";
+import { defaultProjectTaskTypes, type ProjectTaskType } from "@/lib/task-types";
 import { sortTasksByDate, taskDepth } from "@/lib/task-order";
 import { createClient, hasSupabaseConfig } from "@/lib/supabase/client";
 
@@ -33,13 +34,14 @@ function memberToPerson(member?: AssignableMember, manual?: string): Person {
   return { id: member?.user_id || (manual ? `manual-${name}` : "unassigned"), name, initials: initials(name), role: "Ingeniero", color: member ? "#476f8f" : "#7c8c86" };
 }
 
-export function TaskEditor({ task, allTasks, sections, members, canEdit, projectStatuses = defaultProjectStatuses, onClose, onUpdated, onCreated, onDeleted, onSelectTask }: {
+export function TaskEditor({ task, allTasks, sections, members, canEdit, projectStatuses = defaultProjectStatuses, projectTaskTypes = defaultProjectTaskTypes, onClose, onUpdated, onCreated, onDeleted, onSelectTask }: {
   task: Task;
   allTasks: Task[];
   sections: string[];
   members: AssignableMember[];
   canEdit: boolean;
   projectStatuses?: ProjectTaskStatus[];
+  projectTaskTypes?: ProjectTaskType[];
   onClose: () => void;
   onUpdated: (task: Task) => void;
   onCreated: (task: Task) => void;
@@ -66,6 +68,7 @@ export function TaskEditor({ task, allTasks, sections, members, canEdit, project
   // first saved assignee and also changed the form geometry after each click.
   const [manualOwner, setManualOwner] = useState("");
   const [priority, setPriority] = useState<1 | 2 | 3>(task.priority || 2);
+  const [taskTypeId, setTaskTypeId] = useState(task.taskTypeId || "");
   const [privateNote, setPrivateNote] = useState("");
   const [dependencies, setDependencies] = useState<TaskDependency[]>([]);
   const [candidates, setCandidates] = useState<CandidateTask[]>([]);
@@ -170,6 +173,8 @@ export function TaskEditor({ task, allTasks, sections, members, canEdit, project
       if (assigneeError) { setError(assigneeError.code === "PGRST202" ? "Falta aplicar la migración 202607200016_task_delays_actual_dates.sql." : assigneeError.message); setBusy(false); return; }
       const { error: dateError } = await supabase.rpc("update_task_dates", { target_task: task.id, task_start: startDate || null, task_due: dueDate || null, task_actual: effectiveActualDate || null });
       if (dateError) { setError(dateError.code === "PGRST202" ? "Falta aplicar la migración 202607200016_task_delays_actual_dates.sql." : dateError.message); setBusy(false); return; }
+      const { error: typeError } = await supabase.rpc("set_task_type", { target_task: task.id, next_type: taskTypeId || null });
+      if (typeError) { setError(typeError.code === "PGRST202" ? "Falta aplicar la migración 202607200018_flexible_dates_task_types_import.sql." : typeError.message); setBusy(false); return; }
       if (rollupEnabled) await supabase.rpc("set_task_rollup", { target_task: task.id, rollup_enabled: true });
       const { data: authData } = await supabase.auth.getUser();
       if (authData.user) {
@@ -184,7 +189,8 @@ export function TaskEditor({ task, allTasks, sections, members, canEdit, project
       ...chosenMembers.map((member) => member.user_id.startsWith("external:") ? { ...memberToPerson(undefined, member.full_name), id: member.user_id, directoryId: member.user_id.replace("external:", "") } : memberToPerson(member)),
       ...(manualOwner.trim() && !chosenMembers.some((member) => member.full_name.toLowerCase() === manualOwner.trim().toLowerCase()) ? [{ ...memberToPerson(undefined, manualOwner.trim()), directoryId: resolvedDirectoryIds.find((id) => !chosenMembers.some((member) => member.user_id === `external:${id}`)) }] : []),
     ];
-    onUpdated({ ...task, title: title.trim(), description: description.trim(), section, startDate, dueDate, actualCompletionDate: effectiveActualDate, due, status: finalProgress === 100 ? "done" : status, progress: finalProgress, priority, isMilestone, color, assigneeId: owners.find((owner) => !owner.directoryId && !owner.id.startsWith("manual-"))?.id, assigneeIds: chosenMembers.filter((member) => !member.user_id.startsWith("external:")).map((member) => member.user_id), directoryAssigneeIds: owners.map((owner) => owner.directoryId).filter((id): id is string => Boolean(id)), manualAssignee: owners.find((owner) => owner.directoryId || owner.id.startsWith("manual-"))?.name, owners, owner: owners[0] || memberToPerson() });
+    const selectedType = projectTaskTypes.find((item) => item.id === taskTypeId);
+    onUpdated({ ...task, title: title.trim(), description: description.trim(), section, startDate, dueDate, actualCompletionDate: effectiveActualDate, due, status: finalProgress === 100 ? "done" : status, progress: finalProgress, priority, isMilestone, color, taskTypeId: taskTypeId || undefined, taskTypeName: selectedType?.name, taskTypeColor: selectedType?.color, assigneeId: owners.find((owner) => !owner.directoryId && !owner.id.startsWith("manual-"))?.id, assigneeIds: chosenMembers.filter((member) => !member.user_id.startsWith("external:")).map((member) => member.user_id), directoryAssigneeIds: owners.map((owner) => owner.directoryId).filter((id): id is string => Boolean(id)), manualAssignee: owners.find((owner) => owner.directoryId || owner.id.startsWith("manual-"))?.name, owners, owner: owners[0] || memberToPerson() });
     setBusy(false); onClose();
   };
 
@@ -284,7 +290,9 @@ export function TaskEditor({ task, allTasks, sections, members, canEdit, project
             <label className="field-label">Nombre<input value={title} onChange={(event) => setTitle(event.target.value)} disabled={!canEdit} required /></label>
             <label className="field-label">Descripción compartida<textarea value={description} onChange={(event) => setDescription(event.target.value)} disabled={!canEdit} rows={4} placeholder="Contexto, entregables y criterios de aceptación…" /></label>
             <div className="form-grid"><label className="field-label">Sección<select value={section} onChange={(event) => setSection(event.target.value)} disabled={!canEdit}>{sections.map((item) => <option value={item} key={item}>{item}</option>)}</select></label><label className="field-label">Estado<select value={status} onChange={(event) => { const next = event.target.value as TaskStatus; setStatus(next); if (next === "done") setProgress(100); else setActualCompletionDate(""); }} disabled={!canEdit}>{statusOptions.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></label></div>
+            <div className="form-grid"><label className="field-label">Tipo<select value={taskTypeId} onChange={(event) => setTaskTypeId(event.target.value)} disabled={!canEdit}><option value="">Sin tipo</option>{projectTaskTypes.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><span /></div>
             <div className="form-grid three-dates"><label className="field-label">Inicio<input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} disabled={!canEdit} /></label><label className="field-label">Fecha límite<input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} disabled={!canEdit} /></label><label className={`field-label ${actualCompletionDate && dueDate && actualCompletionDate > dueDate ? "actual-date-late" : ""}`}>Fecha real<input type="date" value={actualCompletionDate} onChange={(event) => { setActualCompletionDate(event.target.value); if (event.target.value) { setStatus("done"); setProgress(100); } }} disabled={!canEdit} /><small>{actualCompletionDate && dueDate && actualCompletionDate > dueDate ? `${differenceInCalendarDays(new Date(`${actualCompletionDate}T12:00:00`), new Date(`${dueDate}T12:00:00`))} días después del límite` : "Cierre efectivo"}</small></label></div>
+            {startDate && dueDate && dueDate < startDate && <div className="task-schedule-warning"><AlertTriangle size={14} /><span>La fecha de término es anterior al inicio. Puedes guardar y seguir corrigiendo; mantendremos esta alerta visible.</span></div>}
             <label className={`progress-editor ${rollupEnabled ? "calculated" : ""}`}><span><b>{rollupEnabled ? "Avance calculado desde subtareas" : "Avance de la tarea"}</b><output>{progress}%</output></span><input type="range" min="0" max="100" step="5" value={progress} onChange={(event) => { const next = Number(event.target.value); setProgress(next); if (next === 100) setStatus("done"); else if (status === "done") { setStatus("progress"); setActualCompletionDate(""); } }} disabled={!canEdit || rollupEnabled} /><i style={{ width: `${progress}%`, background: color }} /></label>
             <div className="form-grid assignee-priority-grid"><div className="multi-assignee-field"><span>Responsables</span><div>{members.map((member) => { const selected = selectedAssignees.includes(member.user_id); return <button type="button" className={selected ? "selected" : ""} aria-pressed={selected} onPointerDown={(event) => event.preventDefault()} onClick={() => toggleAssignee(member.user_id)} disabled={!canEdit} key={member.user_id}><i>{initials(member.full_name)}</i><b>{member.full_name || member.email}</b><Check size={12} /></button>; })}{!members.length && <small>No hay integrantes ni responsables guardados.</small>}</div><label className="new-project-assignee"><span>Agregar responsable del proyecto</span><input value={manualOwner} onChange={(event) => setManualOwner(event.target.value)} disabled={!canEdit} placeholder="Nombre de proveedor, contacto o apoyo" /><small>Quedará disponible para las próximas tareas.</small></label></div><label className="field-label">Prioridad<select value={priority} onChange={(event) => setPriority(Number(event.target.value) as 1 | 2 | 3)} disabled={!canEdit}><option value={1}>Baja</option><option value={2}>Media</option><option value={3}>Alta</option></select></label></div>
             <label className="field-label task-color-field">Color manual<input className="task-editor-color" type="color" value={color} onChange={(event) => setColor(event.target.value)} disabled={!canEdit} /></label>

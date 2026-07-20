@@ -37,7 +37,7 @@ export async function getWeekData() {
       .eq("user_id", user.id).eq("week_start", format(weekStart, "yyyy-MM-dd"))
       .order("completed_at", { ascending: true, nullsFirst: true }).order("due_date", { ascending: true }),
     supabase.from("tasks")
-      .select("id,project_id,parent_id,title,due_date,status,progress,priority,completed_at,manual_assignee,projects!tasks_project_id_fkey(name),task_assignees(user_id,profiles!task_assignees_user_id_fkey(full_name))")
+      .select("id,project_id,parent_id,title,due_date,status,progress,priority,completed_at,manual_assignee,projects!tasks_project_id_fkey(name),task_assignees(user_id,profiles!task_assignees_user_id_fkey(full_name)),task_directory_assignees(project_external_assignees!task_directory_assignees_assignee_id_fkey(name))")
       .order("due_date", { ascending: true, nullsFirst: false }).limit(1000),
     supabase.from("project_followups")
       .select("id,project_id,task_id,title,due_date,status,is_blocker,owner_label,projects!project_followups_project_id_fkey(name)")
@@ -71,14 +71,25 @@ export async function getWeekData() {
     return Boolean(completedKey && completedKey >= weekStartKey && completedKey <= weekEndKey);
   }).map((row) => {
     const project = Array.isArray(row.projects) ? row.projects[0] : row.projects;
-    const assignment = row.task_assignees?.[0];
-    const profile = assignment && (Array.isArray(assignment.profiles) ? assignment.profiles[0] : assignment.profiles);
+    const registeredNames = (row.task_assignees ?? []).flatMap((assignment) => {
+      const profile = Array.isArray(assignment.profiles) ? assignment.profiles[0] : assignment.profiles;
+      return profile?.full_name ? [profile.full_name] : [];
+    });
+    const directoryNames = (row.task_directory_assignees ?? []).flatMap((assignment) => {
+      const directory = Array.isArray(assignment.project_external_assignees) ? assignment.project_external_assignees[0] : assignment.project_external_assignees;
+      return directory?.name ? [directory.name] : [];
+    });
+    const ownerNames = Array.from(new Set([
+      ...registeredNames,
+      ...directoryNames,
+      ...(row.manual_assignee ? [row.manual_assignee] : []),
+    ]));
     return {
       id: `task:${row.id}`, taskId: row.id, source: "task" as const, projectId: row.project_id,
       title: row.title, project: project?.name ?? "Proyecto", dueDate: row.due_date,
       done: row.status === "done", priority: row.priority ?? 2,
       overdue: Boolean(row.status !== "done" && row.due_date && row.due_date < todayKey),
-      parentTitle: rootTitle(row), owner: profile?.full_name || row.manual_assignee || "Sin responsable",
+      parentTitle: rootTitle(row), owner: ownerNames.join(", ") || "Sin responsable",
     };
   });
   const followupItems: WeeklyItemData[] = (followupsResult.data ?? []).map((row) => {

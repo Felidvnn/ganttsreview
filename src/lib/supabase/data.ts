@@ -22,6 +22,7 @@ type DbTask = {
   id: string; project_id: string; parent_id?: string | null; title: string; description?: string; section: string; status: string; start_date: string | null;
   due_date: string | null; actual_completion_date?: string | null; progress: number; task_assignees?: DbAssignee[]; task_directory_assignees?: DbDirectoryAssignee[];
   is_milestone?: boolean; color?: string; manual_assignee?: string | null; rollup_progress?: boolean; priority?: number;
+  task_type_id?: string | null; project_task_types?: { id: string; name: string; color: string } | { id: string; name: string; color: string }[] | null;
 };
 
 function oneProfile(value: DbProfile | DbProfile[] | null | undefined) {
@@ -85,7 +86,7 @@ export async function getProjectBundle(id: string): Promise<{ project: Project; 
   const supabase = await createServerSupabaseClient();
   const [projectResult, taskResult, sessionResult] = await Promise.all([
     supabase!.from("projects").select("*, creator:profiles!projects_created_by_fkey(id,full_name,job_title), project_members(user_id,permission,profiles!project_members_user_id_fkey(id,full_name,job_title)), tasks(id,status,progress,due_date,is_milestone)").eq("id", id).single(),
-    supabase!.from("tasks").select("*, task_assignees(user_id,profiles!task_assignees_user_id_fkey(id, full_name, job_title)), task_directory_assignees(assignee_id,project_external_assignees!task_directory_assignees_assignee_id_fkey(id,name))").eq("project_id", id).order("sort_order"),
+    supabase!.from("tasks").select("*, project_task_types!tasks_task_type_id_fkey(id,name,color), task_assignees(user_id,profiles!task_assignees_user_id_fkey(id, full_name, job_title)), task_directory_assignees(assignee_id,project_external_assignees!task_directory_assignees_assignee_id_fkey(id,name))").eq("project_id", id).order("sort_order"),
     supabase!.auth.getUser(),
   ]);
   const { data: projectData, error: projectError } = projectResult;
@@ -113,6 +114,7 @@ export async function getProjectBundle(id: string): Promise<{ project: Project; 
       : null;
     const owners = [...registeredOwners, ...directoryOwners, ...(legacyManual ? [legacyManual] : [])];
     const owner = owners[0] ?? toPerson(null, index);
+    const taskType = Array.isArray(row.project_task_types) ? row.project_task_types[0] : row.project_task_types;
     return {
       id: row.id, projectId: row.project_id, parentId: row.parent_id ?? undefined, rollupProgress: Boolean(row.rollup_progress), title: row.title, description: row.description ?? "", section: row.section || "General",
       owner,
@@ -122,6 +124,7 @@ export async function getProjectBundle(id: string): Promise<{ project: Project; 
       dueDate: row.due_date ?? "", actualCompletionDate: row.actual_completion_date ?? "", isMilestone: Boolean(row.is_milestone),
       startDate: row.start_date ?? "", color: row.color ?? "#2f7669",
       owners, assigneeId: row.task_assignees?.[0]?.user_id, assigneeIds: row.task_assignees?.map((assignment) => assignment.user_id).filter((id): id is string => Boolean(id)), directoryAssigneeIds: row.task_directory_assignees?.map((assignment) => assignment.assignee_id).filter((id): id is string => Boolean(id)), manualAssignee: row.manual_assignee ?? undefined,
+      taskTypeId: row.task_type_id ?? undefined, taskTypeName: taskType?.name, taskTypeColor: taskType?.color,
       overdue: Boolean(row.due_date && dueDate < new Date() && row.status !== "done"),
     };
   });

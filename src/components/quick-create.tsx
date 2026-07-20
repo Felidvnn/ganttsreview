@@ -1,13 +1,26 @@
 "use client";
 
-import { CalendarDays, CheckSquare2, FolderKanban, Milestone, Plus, X } from "lucide-react";
+import { CalendarDays, CheckSquare2, Download, FileSpreadsheet, FolderKanban, Milestone, Plus, Upload, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { projects as demoProjects } from "@/lib/demo-data";
 import { createClient, hasSupabaseConfig } from "@/lib/supabase/client";
 
 type ProjectOption = { id: string; name: string };
+type ImportTaskRow = { ref: string; parentRef: string; section: string; title: string; type: string; startDate: string; dueDate: string; actualDate: string; milestone: boolean; status: string; priority: number; progress: number; owner: string; description: string };
 const suggestedSections = ["General", "Planificación", "Ejecución", "Cierre"];
+const importHeaders = ["ID", "ID padre", "Sección", "Tarea", "Tipo", "Inicio", "Fin", "Fecha real", "Hito", "Estado", "Prioridad", "Avance", "Responsable", "Descripción"];
+
+function importKey(value: unknown) { return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase(); }
+function importDate(value: unknown) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+  const text = String(value ?? "").trim(); if (!text) return "";
+  const iso = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/); if (iso) return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
+  const local = text.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/); return local ? `${local[3]}-${local[2].padStart(2, "0")}-${local[1].padStart(2, "0")}` : text;
+}
+function importedStatus(value: unknown) { const key = importKey(value); return ({ pendiente: "todo", todo: "todo", "en curso": "progress", progreso: "progress", progress: "progress", revision: "review", review: "review", bloqueada: "blocked", bloqueado: "blocked", blocked: "blocked", completada: "done", completado: "done", done: "done" } as Record<string, string>)[key] || "todo"; }
+function importedPriority(value: unknown) { const key = importKey(value); return key === "alta" || key === "3" ? 3 : key === "baja" || key === "1" ? 1 : 2; }
+function importedBoolean(value: unknown) { return ["si", "sí", "true", "1", "x"].includes(importKey(value)); }
 
 function sectionErrorMessage(message: string, code?: string) {
   return message.includes("project_sections") || message.includes("add_project_section") || message.includes("create_project_with_sections") || code === "PGRST202"
@@ -35,6 +48,9 @@ export function QuickCreate({ open, onClose }: { open: boolean; onClose: () => v
   const [sectionSaving, setSectionSaving] = useState(false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [importRows, setImportRows] = useState<ImportTaskRow[]>([]);
+  const [importFileName, setImportFileName] = useState("");
+  const [importBusy, setImportBusy] = useState(false);
 
   useEffect(() => {
     if (!open || !hasSupabaseConfig) return;
@@ -96,6 +112,50 @@ export function QuickCreate({ open, onClose }: { open: boolean; onClose: () => v
     setSection(clean); setNewSectionDraft(""); setAddingSection(false); setSectionSaving(false);
   };
 
+  const downloadTemplate = async () => {
+    setImportBusy(true); setError("");
+    try {
+      const ExcelJS = await import("exceljs");
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet("Tareas", { views: [{ state: "frozen", ySplit: 1 }] });
+      sheet.addRow(importHeaders);
+      sheet.addRows([
+        ["1", "", "Planificación", "Preparar proyecto", "Proceso", "2026-07-20", "2026-07-24", "", "No", "En curso", "Media", 25, "Equipo D2", "Actividad principal"],
+        ["1.1", "1", "Planificación", "Reunión de inicio", "Reunión", "2026-07-21", "2026-07-21", "", "No", "Pendiente", "Alta", 0, "María Pérez", "Subtarea; el padre debe aparecer antes"],
+        ["1.1.1", "1.1", "Planificación", "Enviar minuta", "Entregable", "2026-07-22", "2026-07-22", "", "Sí", "Pendiente", "Media", 0, "María Pérez", "Sub-subtarea, último nivel permitido"],
+      ]);
+      sheet.columns = [10, 12, 18, 34, 18, 14, 14, 14, 10, 16, 12, 12, 22, 42].map((width) => ({ width }));
+      sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } }; sheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2F7669" } }; sheet.autoFilter = { from: "A1", to: "N1" };
+      const help = workbook.addWorksheet("Instrucciones");
+      help.addRows([["Cómo importar"], ["Una fila equivale a una tarea. ID debe ser único."], ["Para crear subtareas, escribe en ID padre el ID de una fila anterior. Se admiten dos niveles."], ["Las fechas pueden quedar provisoriamente invertidas; Orbit las marcará para revisión."], ["Estado: Pendiente, En curso, Revisión, Bloqueada o Completada."], ["Prioridad: Baja, Media o Alta. Avance: número entre 0 y 100."], ["Tipo y responsable se guardarán en el proyecto si todavía no existen."]]);
+      help.getColumn(1).width = 105; help.getRow(1).font = { bold: true, size: 15, color: { argb: "FF2F7669" } };
+      const buffer = await workbook.xlsx.writeBuffer();
+      const url = URL.createObjectURL(new Blob([buffer as BlobPart], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+      const link = document.createElement("a"); link.href = url; link.download = "plantilla-proyecto-orbit.xlsx"; link.click(); URL.revokeObjectURL(url);
+    } catch { setError("No se pudo generar la plantilla Excel."); }
+    setImportBusy(false);
+  };
+
+  const readTemplate = async (file?: File) => {
+    if (!file) return;
+    setImportBusy(true); setError("");
+    try {
+      const ExcelJS = await import("exceljs"); const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(await file.arrayBuffer() as never);
+      const sheet = workbook.getWorksheet("Tareas") || workbook.worksheets[0]; if (!sheet) throw new Error("El archivo no contiene una hoja de tareas.");
+      const headers = new Map<string, number>(); sheet.getRow(1).eachCell((cell, column) => headers.set(importKey(cell.value), column));
+      if (!headers.has("tarea")) throw new Error("La hoja debe conservar la columna Tarea.");
+      const value = (row: import("exceljs").Row, header: string) => { const column = headers.get(importKey(header)); return column ? row.getCell(column).value : undefined; };
+      const rows: ImportTaskRow[] = [];
+      sheet.eachRow((row, number) => { if (number === 1) return; const title = String(value(row, "Tarea") ?? "").trim(); if (!title) return;
+        rows.push({ ref: String(value(row, "ID") ?? rows.length + 1).trim(), parentRef: String(value(row, "ID padre") ?? "").trim(), section: String(value(row, "Sección") ?? "General").trim() || "General", title, type: String(value(row, "Tipo") ?? "Tarea").trim() || "Tarea", startDate: importDate(value(row, "Inicio")), dueDate: importDate(value(row, "Fin")), actualDate: importDate(value(row, "Fecha real")), milestone: importedBoolean(value(row, "Hito")), status: importedStatus(value(row, "Estado")), priority: importedPriority(value(row, "Prioridad")), progress: Math.min(100, Math.max(0, Number(value(row, "Avance")) || 0)), owner: String(value(row, "Responsable") ?? "").trim(), description: String(value(row, "Descripción") ?? "").trim() });
+      });
+      if (!rows.length) throw new Error("No encontramos tareas en la plantilla.");
+      setImportRows(rows); setImportFileName(file.name);
+    } catch (cause) { setImportRows([]); setImportFileName(""); setError(cause instanceof Error ? cause.message : "No se pudo leer el Excel."); }
+    setImportBusy(false);
+  };
+
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -109,7 +169,7 @@ export function QuickCreate({ open, onClose }: { open: boolean; onClose: () => v
         if (!membership) { setError("Primero debes pertenecer a un espacio de trabajo."); setSaving(false); return; }
         const prefix = name.split(/\s+/).filter(Boolean).map((word) => word[0]).join("").slice(0, 4).toUpperCase() || "PRY";
         const code = `${prefix}-${String(new Date().getFullYear()).slice(-2)}-${crypto.randomUUID().slice(0, 4).toUpperCase()}`;
-        const { error: insertError } = await supabase.rpc("create_project_with_sections", {
+        const { error: insertError } = await supabase.rpc(importRows.length ? "create_project_from_template" : "create_project_with_sections", {
           target_workspace: membership.workspace_id,
           project_name: name,
           project_code: code,
@@ -118,8 +178,9 @@ export function QuickCreate({ open, onClose }: { open: boolean; onClose: () => v
           project_start: projectStart || null,
           project_due: projectDue || null,
           section_names: initialSections,
+          ...(importRows.length ? { task_rows: importRows } : {}),
         });
-        if (insertError) { setError(sectionErrorMessage(insertError.message, insertError.code)); setSaving(false); return; }
+        if (insertError) { setError(importRows.length && insertError.code === "PGRST202" ? "Falta aplicar la migración 202607200018_flexible_dates_task_types_import.sql en Supabase." : sectionErrorMessage(insertError.message, insertError.code)); setSaving(false); return; }
       } else {
         if (!projectId) { setError("Crea primero un proyecto para poder agregar tareas o hitos."); setSaving(false); return; }
         const dueDate = String(form.get("due_date") || "");
@@ -136,7 +197,7 @@ export function QuickCreate({ open, onClose }: { open: boolean; onClose: () => v
     setCreated(true); router.refresh();
     setTimeout(() => {
       setCreated(false); setSaving(false); setName(""); setDescription(""); setProjectStart(""); setProjectDue("");
-      setVisibility("private"); setInitialSections(suggestedSections); onClose();
+      setVisibility("private"); setInitialSections(suggestedSections); setImportRows([]); setImportFileName(""); onClose();
     }, 800);
   };
 
@@ -162,6 +223,7 @@ export function QuickCreate({ open, onClose }: { open: boolean; onClose: () => v
                 <label className="field-label">Fecha de término<input type="date" value={projectDue} min={projectStart || undefined} onChange={(event) => setProjectDue(event.target.value)} /></label>
               </div>
               <label className="field-label">Visibilidad<select value={visibility} onChange={(event) => setVisibility(event.target.value as typeof visibility)}><option value="private">Privado · solo tú</option><option value="shared">Con mi líder · puede verlo y hacer seguimiento</option><option value="workspace">Colaborativo · solo personas invitadas</option></select></label>
+              <div className={`project-import-card ${importRows.length ? "ready" : ""}`}><span className="project-import-icon"><FileSpreadsheet size={20} /></span><div><b>Importar planificación desde Excel</b><small>Descarga la plantilla, completa tareas, tipos, fechas y jerarquía; luego súbela aquí.</small>{importFileName && <em>{importFileName} · {importRows.length} tareas listas</em>}</div><button type="button" className="button secondary small" onClick={downloadTemplate} disabled={importBusy}><Download size={14} /> Plantilla</button><label className="button secondary small"><Upload size={14} /> {importRows.length ? "Cambiar" : "Subir Excel"}<input type="file" accept=".xlsx" onChange={(event) => readTemplate(event.target.files?.[0])} /></label>{importRows.length > 0 && <button type="button" className="project-import-clear" onClick={() => { setImportRows([]); setImportFileName(""); }} aria-label="Quitar importación"><X size={14} /></button>}</div>
               <div className="section-builder"><div><span className="field-title">Secciones iniciales</span><small>Podrás agregar más desde el Gantt.</small></div><div className="section-chips">{initialSections.map((item) => <span key={item}>{item}<button type="button" onClick={() => setInitialSections((current) => current.filter((sectionName) => sectionName !== item))} aria-label={`Quitar ${item}`}><X size={12} /></button></span>)}</div><div className="section-add-row"><input value={initialSectionDraft} onChange={(event) => setInitialSectionDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addInitialSection(); } }} placeholder="Nueva sección" /><button type="button" className="button secondary" onClick={addInitialSection}><Plus size={15} /> Agregar</button></div></div>
             </> : <>
               <div className="form-grid">
