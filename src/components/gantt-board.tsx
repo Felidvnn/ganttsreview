@@ -2,7 +2,7 @@
 
 import {
   AlertTriangle, CalendarRange, Check, ChevronDown, ChevronLeft, ChevronRight, CornerDownRight,
-  Columns3, CopyPlus, Link2, Maximize2, Minimize2, Plus, Presentation, X,
+  Columns3, CopyPlus, Link2, Maximize2, Minimize2, Plus, Presentation, Trash2, X,
 } from "lucide-react";
 import { addDays, differenceInCalendarDays, format, startOfWeek } from "date-fns";
 import { es } from "date-fns/locale";
@@ -11,7 +11,7 @@ import type { Person, Task, TaskStatus } from "@/lib/types";
 import { defaultProjectStatuses, type ProjectTaskStatus } from "@/lib/task-statuses";
 import { defaultProjectTaskTypes, taskTypeLabel, type ProjectTaskType } from "@/lib/task-types";
 import { taskDisplayColor, type TaskColorMode } from "@/lib/task-colors";
-import { sortTasksByDate, taskDateKey, taskDepth, taskDisplaySection } from "@/lib/task-order";
+import { sortTasksByDate, sortTasksManual, taskDepth, taskDisplaySection } from "@/lib/task-order";
 import { createClient, hasSupabaseConfig } from "@/lib/supabase/client";
 import { Avatar } from "./avatar";
 import { TaskBadge } from "./status";
@@ -31,7 +31,7 @@ function memberPerson(member: AssignableMember): Person {
 }
 const unassigned: Person = { id: "unassigned", name: "Sin asignar", initials: "—", role: "Ingeniero", color: "#98a6a0" };
 
-export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = false, colorMode = "manual", projectStatuses = defaultProjectStatuses, projectTaskTypes = defaultProjectTaskTypes, onTasksChange, onOpenTask }: { initialTasks: Task[]; projectId: string; timelineStart?: string; readOnly?: boolean; colorMode?: TaskColorMode; projectStatuses?: ProjectTaskStatus[]; projectTaskTypes?: ProjectTaskType[]; onTasksChange?: (tasks: Task[]) => void; onOpenTask?: (task: Task) => void }) {
+export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = false, colorMode = "manual", projectStatuses = defaultProjectStatuses, projectTaskTypes = defaultProjectTaskTypes, taskOrderMode = "date", sectionOrder = [], onTasksChange, onOpenTask }: { initialTasks: Task[]; projectId: string; timelineStart?: string; readOnly?: boolean; colorMode?: TaskColorMode; projectStatuses?: ProjectTaskStatus[]; projectTaskTypes?: ProjectTaskType[]; taskOrderMode?: "date" | "manual"; sectionOrder?: string[]; onTasksChange?: (tasks: Task[]) => void; onOpenTask?: (task: Task) => void }) {
   const projectBase = useMemo(() => timelineStart ? new Date(`${timelineStart}T12:00:00`) : new Date(), [timelineStart]);
   const [items, setItems] = useState<Task[]>(() => initialTasks.map((task) => {
     const start = task.startDate ? new Date(`${task.startDate}T12:00:00`) : addDays(projectBase, task.start - 1);
@@ -54,7 +54,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   const [taskColor, setTaskColor] = useState(colors[0]);
   const [taskStatus, setTaskStatus] = useState<TaskStatus>("todo");
   const [taskPriority, setTaskPriority] = useState<1 | 2 | 3>(2);
-  const [assigneeChoice, setAssigneeChoice] = useState("");
+  const [createAssignees, setCreateAssignees] = useState<string[]>([]);
   const [manualAssignee, setManualAssignee] = useState("");
   const [members, setMembers] = useState<AssignableMember[]>([]);
   const [interactionError, setInteractionError] = useState("");
@@ -70,6 +70,9 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [simpleView, setSimpleView] = useState(false);
   const [assigneeEditorTaskId, setAssigneeEditorTaskId] = useState<string | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedTasks, setSelectedTasks] = useState<string[]>([]);
+  const [bulkBusy, setBulkBusy] = useState<"copy" | "delete" | null>(null);
   const shellRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const columnResizeRef = useRef<ColumnResizeState | null>(null);
@@ -85,12 +88,8 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   }), [rangeDays, segmentSize, timelineDays]);
   const todayKey = dateValue(new Date());
   const todayOffset = differenceInCalendarDays(new Date(), windowStart);
-  const orderedItems = useMemo(() => sortTasksByDate(items), [items]);
-  const sections = useMemo(() => Array.from(new Set([...sectionOptions, ...items.map((item) => taskDisplaySection(item, items))])).sort((left, right) => {
-    const leftTask = orderedItems.find((item) => taskDisplaySection(item, items) === left);
-    const rightTask = orderedItems.find((item) => taskDisplaySection(item, items) === right);
-    return (leftTask ? taskDateKey(leftTask) : "9999-12-31").localeCompare(rightTask ? taskDateKey(rightTask) : "9999-12-31");
-  }), [items, orderedItems, sectionOptions]);
+  const orderedItems = useMemo(() => taskOrderMode === "manual" ? sortTasksManual(items) : sortTasksByDate(items), [items, taskOrderMode]);
+  const sections = useMemo(() => Array.from(new Set([...sectionOrder, ...sectionOptions, ...items.map((item) => taskDisplaySection(item, items))])), [items, sectionOptions, sectionOrder]);
   const hasChildren = (task: Task) => items.some((item) => item.parentId === task.id);
   const isHiddenByParent = (task: Task) => {
     let parentId = task.parentId; const visited = new Set<string>();
@@ -103,6 +102,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   const allTasksInSection = (section: string) => orderedItems.filter((item) => taskDisplaySection(item, items) === section);
   const tasksInSection = (section: string) => allTasksInSection(section).filter((item) => !isHiddenByParent(item));
   const visible = orderedItems.filter((task) => !collapsed.includes(taskDisplaySection(task, items)) && !isHiddenByParent(task));
+  const allVisibleSelected = visible.length > 0 && visible.every((task) => selectedTasks.includes(task.id));
   const activeStatuses = useMemo(() => projectStatuses.filter((item) => item.enabled).sort((left, right) => left.sortOrder - right.sortOrder), [projectStatuses]);
   const statuses = useMemo(() => activeStatuses.map((item) => ({ value: item.status, label: item.label })), [activeStatuses]);
 
@@ -207,7 +207,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
         const due = task.dueDate ? new Date(`${task.dueDate}T12:00:00`) : addDays(start, Math.max(0, task.duration - 1));
         return { ...task, startDate: dateValue(start), dueDate: dateValue(due), color: task.color || "#2f7669" };
       });
-      const signature = (list: Task[]) => JSON.stringify(list.map((task) => [task.id, task.parentId, task.title, task.section, task.status, task.progress, task.priority, task.startDate, task.dueDate, task.actualCompletionDate, task.color, task.assigneeIds, task.directoryAssigneeIds, task.manualAssignee, task.rollupProgress, task.taskTypeId]));
+      const signature = (list: Task[]) => JSON.stringify(list.map((task) => [task.id, task.parentId, task.title, task.section, task.status, task.progress, task.priority, task.startDate, task.dueDate, task.actualCompletionDate, task.color, task.assigneeIds, task.directoryAssigneeIds, task.manualAssignee, task.rollupProgress, task.taskTypeId, task.sortOrder]));
       if (signature(current) === signature(normalized)) return current;
       syncingFromParentRef.current = true;
       return normalized;
@@ -216,7 +216,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
 
   const openTaskCreator = () => {
     setCreateError(""); setCreateKind("task"); setTaskSection(sections[0] ?? "General");
-    setTaskColor(colors[0]); setTaskStatus("todo"); setTaskPriority(2); setAssigneeChoice(""); setManualAssignee(""); setCreateOpen(true);
+    setTaskColor(colors[0]); setTaskStatus("todo"); setTaskPriority(2); setCreateAssignees([]); setManualAssignee(""); setCreateOpen(true);
   };
 
   const addProjectSection = async () => {
@@ -241,14 +241,12 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
     const dueDate = rawDue || (createKind === "milestone" ? startDate : "");
     if (hasSupabaseConfig) {
       const supabase = createClient()!;
-      const selectedChoice = members.find((member) => member.user_id === assigneeChoice);
-      const externalName = assigneeChoice.startsWith("external:") ? selectedChoice?.full_name : assigneeChoice === "__manual__" ? manualAssignee.trim() : "";
       const payload = {
         target_project: projectId, task_title: title, task_section: taskSection,
         task_start: startDate, task_due: dueDate || null, task_is_milestone: createKind === "milestone",
         task_color: taskColor, task_status: taskStatus,
-        target_assignee: assigneeChoice && assigneeChoice !== "__manual__" && !assigneeChoice.startsWith("external:") ? assigneeChoice : null,
-        assignee_label: externalName || null,
+        target_assignee: null,
+        assignee_label: null,
       };
       let creation = await supabase.rpc("create_task_with_details", payload);
       if (creation.error?.message.toLowerCase().includes("jwt issued at future")) {
@@ -268,19 +266,18 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
         setCreateError(message); setCreating(false); return;
       }
       const taskId = String(creation.data);
-      let directoryId: string | null = null;
-      if (assigneeChoice === "__manual__" && manualAssignee.trim()) {
+      const registeredIds = createAssignees.filter((id) => !id.startsWith("external:"));
+      const directoryIds = createAssignees.filter((id) => id.startsWith("external:")).map((id) => id.replace("external:", ""));
+      if (manualAssignee.trim()) {
         const { data: externalId } = await supabase.rpc("remember_external_assignee", { target_project: projectId, assignee_name: manualAssignee.trim() });
-        if (externalId) { directoryId = String(externalId); setMembers((current) => current.some((item) => item.user_id === `external:${externalId}`) ? current : [...current, { user_id: `external:${externalId}`, full_name: manualAssignee.trim(), email: "Responsable del proyecto" }]); }
+        if (externalId) { directoryIds.push(String(externalId)); setMembers((current) => current.some((item) => item.user_id === `external:${externalId}`) ? current : [...current, { user_id: `external:${externalId}`, full_name: manualAssignee.trim(), email: "Responsable del proyecto" }]); }
       }
-      if (assigneeChoice.startsWith("external:")) directoryId = assigneeChoice.replace("external:", "");
-      const registeredId = assigneeChoice && assigneeChoice !== "__manual__" && !assigneeChoice.startsWith("external:") ? assigneeChoice : null;
-      const assignment = await supabase.rpc("set_task_assignees", { target_task: taskId, target_users: registeredId ? [registeredId] : [], target_directory_assignees: directoryId ? [directoryId] : [] });
+      const assignment = await supabase.rpc("set_task_assignees", { target_task: taskId, target_users: registeredIds, target_directory_assignees: directoryIds });
       if (assignment.error && assignment.error.code !== "PGRST202") setInteractionError(`La tarea fue creada, pero no se guardó el responsable: ${assignment.error.message}`);
-      const selectedMember = members.find((member) => member.user_id === assigneeChoice && !member.user_id.startsWith("external:"));
-      const owner = selectedMember ? memberPerson(selectedMember) : externalName
-        ? { ...unassigned, id: `manual-${taskId}`, name: externalName, initials: initials(externalName) }
-        : unassigned;
+      const selectedMembers = members.filter((member) => createAssignees.includes(member.user_id));
+      const selectedOwners = selectedMembers.map(memberPerson);
+      if (manualAssignee.trim()) selectedOwners.push({ ...unassigned, id: `manual-${taskId}`, name: manualAssignee.trim(), initials: initials(manualAssignee.trim()) });
+      const owner = selectedOwners[0] || unassigned;
       const start = new Date(`${startDate}T12:00:00`);
       const due = dueDate ? new Date(`${dueDate}T12:00:00`) : start;
       setItems((current) => [...current, {
@@ -290,7 +287,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
         progress: taskStatus === "done" ? 100 : 0, status: taskStatus, priority: taskPriority,
         due: dueDate ? format(due, "dd MMM", { locale: es }) : "Sin fecha",
         startDate, dueDate, isMilestone: createKind === "milestone", color: taskColor,
-        assigneeId: selectedMember?.user_id, assigneeIds: selectedMember ? [selectedMember.user_id] : [], directoryAssigneeIds: directoryId ? [directoryId] : [], manualAssignee: externalName || undefined, owners: owner.id === "unassigned" ? [] : [owner],
+        assigneeId: registeredIds[0], assigneeIds: registeredIds, directoryAssigneeIds: directoryIds, manualAssignee: selectedOwners.find((item) => item.id.startsWith("external:") || item.id.startsWith("manual-"))?.name, owners: selectedOwners,
       }]);
       const { error: priorityError } = await supabase.rpc("set_task_priority", { target_task: taskId, next_priority: taskPriority });
       if (priorityError) {
@@ -423,6 +420,44 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
     setItems((current) => [...current, { ...task, id: newId, title: `Copia de ${task.title}`, status: "todo", progress: 0, actualCompletionDate: "", rollupProgress: false }]);
   };
 
+  const toggleTaskSelection = (taskId: string) => setSelectedTasks((current) => current.includes(taskId) ? current.filter((id) => id !== taskId) : [...current, taskId]);
+  const duplicateSelectedTasks = async () => {
+    if (!selectedTasks.length || readOnly) return;
+    setBulkBusy("copy"); setInteractionError("");
+    const selected = orderedItems.filter((task) => selectedTasks.includes(task.id));
+    const idMap = new Map<string, string>();
+    if (hasSupabaseConfig) {
+      const { data, error } = await createClient()!.rpc("duplicate_tasks", { target_tasks: selectedTasks });
+      if (error) { setInteractionError(error.code === "PGRST202" ? "Falta aplicar la migración 202607200020_fix_bulk_task_copy_uuid.sql." : error.message); setBulkBusy(null); return; }
+      for (const row of data || []) idMap.set(String(row.source_task), String(row.duplicated_task));
+    } else selected.forEach((task, index) => idMap.set(task.id, `copy-${Date.now()}-${index}`));
+    const maxOrder = Math.max(0, ...items.map((task) => task.sortOrder || 0));
+    const copies = selected.map((task, index): Task => ({ ...task, id: idMap.get(task.id)!, parentId: task.parentId ? idMap.get(task.parentId) || task.parentId : undefined, title: `Copia de ${task.title}`, status: "todo", progress: 0, actualCompletionDate: "", rollupProgress: false, sortOrder: maxOrder + (index + 1) * 10 }));
+    setItems((current) => [...current, ...copies]); setSelectedTasks([]); setSelectionMode(false); setBulkBusy(null);
+  };
+
+  const deleteSelectedTasks = async () => {
+    if (!selectedTasks.length || readOnly) return;
+    const selectedSet = new Set(selectedTasks);
+    const roots = items.filter((task) => selectedSet.has(task.id) && !(() => {
+      let parentId = task.parentId; const visited = new Set<string>();
+      while (parentId && !visited.has(parentId)) { if (selectedSet.has(parentId)) return true; visited.add(parentId); parentId = items.find((item) => item.id === parentId)?.parentId; }
+      return false;
+    })());
+    const descendantIds = new Set<string>(); roots.forEach((task) => branchIds(task.id).forEach((id) => descendantIds.add(id)));
+    const affected = descendantIds.size;
+    if (!window.confirm(`¿Eliminar ${affected} ${affected === 1 ? "tarea" : "tareas"}? Esta acción también elimina las subtareas incluidas y no se puede deshacer.`)) return;
+    setBulkBusy("delete"); setInteractionError("");
+    if (hasSupabaseConfig) {
+      for (const task of roots) {
+        const { error } = await createClient()!.rpc("delete_task", { target_task: task.id });
+        if (error) { setInteractionError(error.message); setBulkBusy(null); return; }
+      }
+    }
+    setItems((current) => current.filter((task) => !descendantIds.has(task.id)));
+    setSelectedTasks([]); setSelectionMode(false); setBulkBusy(null);
+  };
+
   const branchIds = (rootId: string) => {
     const result = new Set<string>([rootId]);
     let changed = true;
@@ -548,9 +583,10 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
     <div className={`gantt-shell ${readOnly ? "gantt-readonly" : ""}`} ref={shellRef}>
       <div className="gantt-toolbar">
         <div className="gantt-date-controls"><button className="icon-button period-button" onClick={() => setWindowStart((date) => addDays(date, -Math.ceil(rangeDays / 2)))} aria-label="Periodo anterior"><ChevronLeft size={17} /></button><button className="today-button" onClick={() => setWindowStart(startOfWeek(new Date(), { weekStartsOn: 1 }))}>Hoy</button><button className="icon-button period-button" onClick={() => setWindowStart((date) => addDays(date, Math.ceil(rangeDays / 2)))} aria-label="Periodo siguiente"><ChevronRight size={17} /></button><label className="range-select"><CalendarRange size={15} /><select value={rangeDays} onChange={(event) => setRangeDays(Number(event.target.value))}><option value={28}>4 semanas</option><option value={56}>8 semanas</option><option value={84}>12 semanas</option><option value={182}>26 semanas</option></select></label></div>
-        <div className="gantt-toolbar-actions">{!simpleView && <><span className="wheel-hint">Shift + rueda para navegar</span><div className="column-visibility"><button type="button" className={`button secondary small columns-button ${columnsOpen ? "active" : ""}`} onClick={() => setColumnsOpen((current) => !current)} aria-label="Mostrar u ocultar columnas"><Columns3 size={15} /> Columnas</button>{columnsOpen && <div className="column-visibility-menu"><header><b>Columnas visibles</b><span>Personaliza esta vista</span></header>{columnOptions.map((option) => <label key={option.key}><input type="checkbox" checked={visibleColumns[option.key]} onChange={() => toggleColumn(option.key)} /><span>{option.label}</span><i /></label>)}</div>}</div></>}<button className={`button secondary small simple-view-button ${simpleView ? "active" : ""}`} onClick={() => setSimpleView((current) => !current)}><Presentation size={15} />{simpleView ? "Vista completa" : "Vista simple"}</button>{!simpleView && !readOnly && <><button className="button secondary small section-button" onClick={() => { setSectionError(""); setSectionOpen(true); }}><Plus size={15} /> Sección</button><button className="button primary small" onClick={openTaskCreator}><Plus size={16} /> Agregar tarea/hito</button></>}<button className="icon-button fullscreen-button" onClick={toggleFullscreen} aria-label={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"} title={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}>{isFullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button></div>
+        <div className="gantt-toolbar-actions">{!simpleView && <><span className="wheel-hint">Shift + rueda para navegar</span><div className="column-visibility"><button type="button" className={`button secondary small columns-button ${columnsOpen ? "active" : ""}`} onClick={() => setColumnsOpen((current) => !current)} aria-label="Mostrar u ocultar columnas"><Columns3 size={15} /> Columnas</button>{columnsOpen && <div className="column-visibility-menu"><header><b>Columnas visibles</b><span>Personaliza esta vista</span></header>{columnOptions.map((option) => <label key={option.key}><input type="checkbox" checked={visibleColumns[option.key]} onChange={() => toggleColumn(option.key)} /><span>{option.label}</span><i /></label>)}</div>}</div></>}<button className={`button secondary small simple-view-button ${simpleView ? "active" : ""}`} onClick={() => setSimpleView((current) => !current)}><Presentation size={15} />{simpleView ? "Vista completa" : "Vista simple"}</button>{!simpleView && !readOnly && <><button className={`button secondary small selection-button ${selectionMode ? "active" : ""}`} onClick={() => { setSelectionMode((current) => !current); setSelectedTasks([]); }}><Check size={15} /> {selectionMode ? "Cancelar" : "Seleccionar"}</button><button className="button secondary small section-button" onClick={() => { setSectionError(""); setSectionOpen(true); }}><Plus size={15} /> Sección</button><button className="button primary small" onClick={openTaskCreator}><Plus size={16} /> Agregar tarea/hito</button></>}<button className="icon-button fullscreen-button" onClick={toggleFullscreen} aria-label={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"} title={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}>{isFullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button></div>
       </div>
       {interactionError && <div className="gantt-message"><AlertTriangle size={14} />{interactionError}<button onClick={() => setInteractionError("")}><X size={14} /></button></div>}
+      {selectionMode && <div className="gantt-selection-bar"><span><Check size={15} /><b>{selectedTasks.length}</b> {selectedTasks.length === 1 ? "tarea seleccionada" : "tareas seleccionadas"}</span><div><button className="button secondary small" onClick={() => setSelectedTasks(allVisibleSelected ? [] : visible.map((task) => task.id))}>{allVisibleSelected ? "Limpiar" : "Seleccionar visibles"}</button><button className="button danger-outline small" onClick={deleteSelectedTasks} disabled={!selectedTasks.length || bulkBusy !== null}><Trash2 size={14} />{bulkBusy === "delete" ? "Eliminando…" : "Eliminar"}</button><button className="button primary small" onClick={duplicateSelectedTasks} disabled={!selectedTasks.length || bulkBusy !== null}><CopyPlus size={14} />{bulkBusy === "copy" ? "Copiando…" : "Copiar"}</button></div></div>}
       {simpleView && <div className="gantt-simple-scroll" onWheel={navigateWheel}>
         <div className="gantt-simple-stage" style={{ "--day-size": `${100 / rangeDays}%` } as React.CSSProperties}>
           <div className="gantt-simple-head">
@@ -605,11 +641,11 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
                 const scheduleInvalid = Boolean(task.startDate && task.dueDate && task.dueDate < task.startDate);
                 const selectedType = projectTaskTypes.find((item) => item.id === task.taskTypeId);
                 return <div data-task-drop={task.id} className={`gantt-grid gantt-task-row ${scheduleInvalid ? "schedule-invalid" : ""} ${hierarchyTarget === task.id ? "hierarchy-drop-target" : ""} ${hierarchyDrag === task.id ? "hierarchy-dragging" : ""} ${assigneeEditorTaskId === task.id ? "assignee-row-editing" : ""}`} key={task.id} style={gridStyle} onDragOver={(event) => { if (!hierarchyDrag || hierarchyDrag === task.id) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setHierarchyTarget(task.id); }} onDragLeave={() => setHierarchyTarget((current) => current === task.id ? null : current)} onDrop={(event) => dropOnTask(event, task.id)}>
-                  <div className={`gantt-task-name task-depth-${depth}`} draggable={!readOnly} onDragStart={(event) => startHierarchyDrag(event, task.id)} onDragEnd={() => { setHierarchyDrag(null); setHierarchyTarget(null); }} title={readOnly ? undefined : "Arrastra para convertirla en subtarea o moverla a una sección"}>
-                    <button className={`tiny-check ${task.status === "done" ? "checked" : ""}`} disabled={readOnly} onClick={() => updatePresentation(task.id, task.status === "done" ? "todo" : "done", task.color || colors[0])} title={readOnly ? "Estado visible en modo de consulta" : "Marcar como completada"}>{task.status === "done" && <Check size={12} />}</button>
+                  <div className={`gantt-task-name task-depth-${depth}`} draggable={!readOnly && !selectionMode} onDragStart={(event) => startHierarchyDrag(event, task.id)} onDragEnd={() => { setHierarchyDrag(null); setHierarchyTarget(null); }} title={selectionMode ? "Selecciona tareas para aplicar acciones" : readOnly ? undefined : "Arrastra para convertirla en subtarea o moverla a una sección"}>
+                    {selectionMode ? <button className={`task-selection-check ${selectedTasks.includes(task.id) ? "selected" : ""}`} onClick={() => toggleTaskSelection(task.id)} title="Seleccionar tarea">{selectedTasks.includes(task.id) && <Check size={12} />}</button> : <button className={`tiny-check ${task.status === "done" ? "checked" : ""}`} disabled={readOnly} onClick={() => updatePresentation(task.id, task.status === "done" ? "todo" : "done", task.color || colors[0])} title={readOnly ? "Estado visible en modo de consulta" : "Marcar como completada"}>{task.status === "done" && <Check size={12} />}</button>}
                     <span className="task-tree-control">{taskHasChildren ? <button type="button" className={`hierarchy-toggle ${depth > 0 ? "hierarchy-branch" : "hierarchy-root"} ${collapsedParents.includes(task.id) ? "collapsed" : ""}`} onClick={() => setCollapsedParents((current) => current.includes(task.id) ? current.filter((id) => id !== task.id) : [...current, task.id])} title={collapsedParents.includes(task.id) ? "Mostrar subtareas" : "Ocultar subtareas"} aria-label={collapsedParents.includes(task.id) ? "Mostrar subtareas" : "Ocultar subtareas"}>{depth > 0 ? <CornerDownRight size={13} /> : <span className="root-chevron" />}</button> : depth > 0 ? <CornerDownRight className="subtask-arrow" size={13} /> : <span className="hierarchy-spacer" />}</span>
                     <span><span className="task-title-line"><button type="button" className="task-open-button" onClick={() => openTask(task)}>{task.title}</button></span>{(hierarchyLabel(task) || task.isMilestone) && <small>{hierarchyLabel(task) && <em>{hierarchyLabel(task)}</em>}{task.isMilestone && "Hito"}</small>}</span>
-                    {!readOnly && <button type="button" className="task-duplicate-button" onClick={() => duplicateTask(task)} title="Duplicar tarea"><CopyPlus size={13} /></button>}
+                    {!readOnly && !selectionMode && <button type="button" className="task-duplicate-button" onClick={() => duplicateTask(task)} title="Duplicar tarea"><CopyPlus size={13} /></button>}
                     {!readOnly && colorMode === "manual" && <input className="task-color-input" type="color" value={task.color || colors[0]} onChange={(event) => setItems((current) => current.map((item) => item.id === task.id ? { ...item, color: event.target.value } : item))} onBlur={(event) => updatePresentation(task.id, task.status, event.target.value)} title="Color de la tarea" />}
                   </div>
                   {visibleColumns.taskType && <div className="gantt-task-type" style={{ "--task-type-color": selectedType?.color || task.taskTypeColor || "#6b7d75" } as React.CSSProperties}>{readOnly || !projectTaskTypes.length ? <span><i />{selectedType?.name || task.taskTypeName || taskTypeLabel(task.taskTypeId, projectTaskTypes, task.isMilestone)}</span> : <select value={task.taskTypeId || ""} onChange={(event) => updateTaskType(task.id, event.target.value)} aria-label={`Tipo de ${task.title}`}><option value="">Sin tipo</option>{projectTaskTypes.map((type) => <option value={type.id} key={type.id}>{type.name}</option>)}</select>}</div>}
@@ -652,16 +688,16 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
           const taskHasChildren = hasChildren(task);
           const depth = taskDepth(task, items);
           return <article className={`mobile-task-card mobile-depth-${depth}`} key={task.id} style={{ borderLeftColor: taskDisplayColor(task, colorMode) }}>
-            <div><button className={`tiny-check ${task.status === "done" ? "checked" : ""}`} disabled={readOnly} onClick={() => updatePresentation(task.id, task.status === "done" ? "todo" : "done", task.color || colors[0])}>{task.status === "done" && <Check size={12} />}</button><span className="task-tree-control">{taskHasChildren ? <button type="button" className={`hierarchy-toggle ${depth > 0 ? "hierarchy-branch" : "hierarchy-root"} ${collapsedParents.includes(task.id) ? "collapsed" : ""}`} onClick={() => setCollapsedParents((current) => current.includes(task.id) ? current.filter((id) => id !== task.id) : [...current, task.id])}>{depth > 0 ? <CornerDownRight size={13} /> : <span className="root-chevron" />}</button> : depth > 0 ? <CornerDownRight className="subtask-arrow" size={13} /> : <span className="hierarchy-spacer" />}</span><span><span className="task-title-line"><button type="button" className="task-open-button" onClick={() => openTask(task)}>{task.title}</button></span>{(hierarchyLabel(task) || task.isMilestone) && <small>{hierarchyLabel(task) || "Hito"}</small>}</span><span className="mobile-owner-compact">{task.owner.name}</span></div>
+            <div>{selectionMode ? <button className={`task-selection-check ${selectedTasks.includes(task.id) ? "selected" : ""}`} onClick={() => toggleTaskSelection(task.id)} title="Seleccionar tarea">{selectedTasks.includes(task.id) && <Check size={12} />}</button> : <button className={`tiny-check ${task.status === "done" ? "checked" : ""}`} disabled={readOnly} onClick={() => updatePresentation(task.id, task.status === "done" ? "todo" : "done", task.color || colors[0])}>{task.status === "done" && <Check size={12} />}</button>}<span className="task-tree-control">{taskHasChildren ? <button type="button" className={`hierarchy-toggle ${depth > 0 ? "hierarchy-branch" : "hierarchy-root"} ${collapsedParents.includes(task.id) ? "collapsed" : ""}`} onClick={() => setCollapsedParents((current) => current.includes(task.id) ? current.filter((id) => id !== task.id) : [...current, task.id])}>{depth > 0 ? <CornerDownRight size={13} /> : <span className="root-chevron" />}</button> : depth > 0 ? <CornerDownRight className="subtask-arrow" size={13} /> : <span className="hierarchy-spacer" />}</span><span><span className="task-title-line"><button type="button" className="task-open-button" onClick={() => selectionMode ? toggleTaskSelection(task.id) : openTask(task)}>{task.title}</button></span>{(hierarchyLabel(task) || task.isMilestone) && <small>{hierarchyLabel(task) || "Hito"}</small>}</span><span className="mobile-owner-compact">{task.owner.name}</span></div>
             <div className="mobile-task-progress"><span><i style={{ width: `${task.progress}%`, background: taskDisplayColor(task, colorMode) }} /></span><b>{task.progress}%</b></div>
             <div className="mobile-task-foot"><span>{task.isMilestone ? <span className="milestone-label">Hito</span> : <TaskBadge status={task.status} label={projectStatuses.find((item) => item.status === task.status)?.label} color={projectStatuses.find((item) => item.status === task.status)?.color} />}</span><i className={`task-priority priority-${task.priority === 3 ? "alta" : task.priority === 1 ? "baja" : "media"}`}>{task.priority === 3 ? "Alta" : task.priority === 1 ? "Baja" : "Media"}</i>{task.blockedBy && <span className="dependency-note"><Link2 size={12} /> {task.blockedBy}</span>}</div>
           </article>;
         })}
         {!visible.length && <div className="gantt-empty"><Check size={18} /><b>Aún no hay tareas visibles</b><span>{items.length ? "Expande una tarea o sección para ver sus subtareas." : readOnly ? "Este proyecto todavía no tiene planificación." : "Agrega la primera tarea para comenzar."}</span></div>}
       </div>}
-      {!simpleView && !readOnly && <button className="gantt-add-bottom" onClick={openTaskCreator}><Plus size={16} /> Agregar tarea/hito</button>}
+      {!simpleView && !readOnly && !selectionMode && <button className="gantt-add-bottom" onClick={openTaskCreator}><Plus size={16} /> Agregar tarea/hito</button>}
 
-      {createOpen && <div className="modal-layer" role="dialog" aria-modal="true" aria-label={createKind === "milestone" ? "Nuevo hito" : "Nueva tarea"}><button className="modal-backdrop" onClick={() => setCreateOpen(false)} /><section className="modal-card task-create-modal"><div className="modal-head"><div><span className="eyebrow">PLANIFICACIÓN</span><h2>{createKind === "milestone" ? "Nuevo hito" : "Nueva tarea"}</h2></div><button className="icon-button" onClick={() => setCreateOpen(false)}><X size={19} /></button></div><form onSubmit={createTask}><div className="task-kind-switch"><button type="button" className={createKind === "task" ? "active" : ""} onClick={() => setCreateKind("task")}>Tarea</button><button type="button" className={createKind === "milestone" ? "active" : ""} onClick={() => setCreateKind("milestone")}>Hito</button></div><label className="field-label">Nombre<input name="title" autoFocus placeholder={createKind === "milestone" ? "Ej. Aprobación de ingeniería" : "Ej. Revisar ingeniería de detalle"} required /></label><div className="form-grid"><label className="field-label">Sección<div className="section-select-row"><select value={taskSection} onChange={(event) => setTaskSection(event.target.value)}>{sections.map((section) => <option value={section} key={section}>{section}</option>)}</select><button type="button" className="icon-button" onClick={() => { setSectionError(""); setSectionOpen(true); }} title="Agregar sección"><Plus size={17} /></button></div></label><label className="field-label">Estado<select value={taskStatus} onChange={(event) => setTaskStatus(event.target.value as TaskStatus)}>{statuses.map((status) => <option value={status.value} key={status.value}>{status.label}</option>)}</select></label></div><div className="form-grid">{createKind === "task" && <label className="field-label">Inicio<input name="start_date" type="date" /></label>}<label className="field-label">{createKind === "milestone" ? "Fecha del hito" : "Fecha límite"}<input name="due_date" type="date" /></label></div><label className="field-label">Responsable<select value={assigneeChoice} onChange={(event) => setAssigneeChoice(event.target.value)}><option value="">Sin asignar</option>{members.map((member) => <option value={member.user_id} key={member.user_id}>{member.full_name}{member.user_id.startsWith("external:") ? " · Externo" : ""}</option>)}<option value="__manual__">Otro nombre (externo o ficticio)…</option></select></label>{assigneeChoice === "__manual__" && <label className="field-label">Nombre del responsable<input value={manualAssignee} onChange={(event) => setManualAssignee(event.target.value)} placeholder="Ej. Contratista eléctrico" required /></label>}<label className="field-label">Prioridad<select value={taskPriority} onChange={(event) => setTaskPriority(Number(event.target.value) as 1 | 2 | 3)}><option value={1}>Baja</option><option value={2}>Media</option><option value={3}>Alta</option></select></label><div className="task-color-picker"><span>Color</span><div>{colors.map((color) => <button type="button" key={color} className={taskColor === color ? "selected" : ""} style={{ background: color }} onClick={() => setTaskColor(color)} aria-label={`Usar color ${color}`} />)}<label title="Color personalizado"><input type="color" value={taskColor} onChange={(event) => setTaskColor(event.target.value)} /></label></div></div>{createError && <p className="form-error">{createError}</p>}<div className="modal-actions"><button type="button" className="button secondary" onClick={() => setCreateOpen(false)}>Cancelar</button><button className="button primary" disabled={creating}>{creating ? "Creando..." : `Crear ${createKind === "milestone" ? "hito" : "tarea"}`}</button></div></form></section></div>}
+      {createOpen && <div className="modal-layer" role="dialog" aria-modal="true" aria-label={createKind === "milestone" ? "Nuevo hito" : "Nueva tarea"}><button className="modal-backdrop" onClick={() => setCreateOpen(false)} /><section className="modal-card task-create-modal"><div className="modal-head"><div><span className="eyebrow">PLANIFICACIÓN</span><h2>{createKind === "milestone" ? "Nuevo hito" : "Nueva tarea"}</h2></div><button className="icon-button" onClick={() => setCreateOpen(false)}><X size={19} /></button></div><form onSubmit={createTask}><div className="task-kind-switch"><button type="button" className={createKind === "task" ? "active" : ""} onClick={() => setCreateKind("task")}>Tarea</button><button type="button" className={createKind === "milestone" ? "active" : ""} onClick={() => setCreateKind("milestone")}>Hito</button></div><label className="field-label">Nombre<input name="title" autoFocus placeholder={createKind === "milestone" ? "Ej. Aprobación de ingeniería" : "Ej. Revisar ingeniería de detalle"} required /></label><div className="form-grid"><label className="field-label">Sección<div className="section-select-row"><select value={taskSection} onChange={(event) => setTaskSection(event.target.value)}>{sections.map((section) => <option value={section} key={section}>{section}</option>)}</select><button type="button" className="icon-button" onClick={() => { setSectionError(""); setSectionOpen(true); }} title="Agregar sección"><Plus size={17} /></button></div></label><label className="field-label">Estado<select value={taskStatus} onChange={(event) => setTaskStatus(event.target.value as TaskStatus)}>{statuses.map((status) => <option value={status.value} key={status.value}>{status.label}</option>)}</select></label></div><div className="form-grid">{createKind === "task" && <label className="field-label">Inicio<input name="start_date" type="date" /></label>}<label className="field-label">{createKind === "milestone" ? "Fecha del hito" : "Fecha límite"}<input name="due_date" type="date" /></label></div><div className="multi-assignee-field create-task-assignees"><span>Responsables</span><div>{members.map((member) => { const selected = createAssignees.includes(member.user_id); return <button type="button" className={selected ? "selected" : ""} aria-pressed={selected} onClick={() => setCreateAssignees((current) => current.includes(member.user_id) ? current.filter((id) => id !== member.user_id) : [...current, member.user_id])} key={member.user_id}><i>{initials(member.full_name)}</i><b>{member.full_name || member.email}</b><Check size={12} /></button>; })}{!members.length && <small>No hay integrantes ni responsables guardados.</small>}</div><label className="new-project-assignee"><span>Agregar responsable del proyecto</span><input value={manualAssignee} onChange={(event) => setManualAssignee(event.target.value)} placeholder="Nombre de proveedor, contacto o apoyo" /><small>Quedará disponible para las próximas tareas.</small></label></div><label className="field-label">Prioridad<select value={taskPriority} onChange={(event) => setTaskPriority(Number(event.target.value) as 1 | 2 | 3)}><option value={1}>Baja</option><option value={2}>Media</option><option value={3}>Alta</option></select></label><div className="task-color-picker"><span>Color</span><div>{colors.map((color) => <button type="button" key={color} className={taskColor === color ? "selected" : ""} style={{ background: color }} onClick={() => setTaskColor(color)} aria-label={`Usar color ${color}`} />)}<label title="Color personalizado"><input type="color" value={taskColor} onChange={(event) => setTaskColor(event.target.value)} /></label></div></div>{createError && <p className="form-error">{createError}</p>}<div className="modal-actions"><button type="button" className="button secondary" onClick={() => setCreateOpen(false)}>Cancelar</button><button className="button primary" disabled={creating}>{creating ? "Creando..." : `Crear ${createKind === "milestone" ? "hito" : "tarea"}`}</button></div></form></section></div>}
       {sectionOpen && <div className="modal-layer nested-modal" role="dialog" aria-modal="true" aria-label="Nueva sección"><button className="modal-backdrop" onClick={() => setSectionOpen(false)} /><section className="modal-card section-modal"><div className="modal-head"><div><span className="eyebrow">ESTRUCTURA</span><h2>Nueva sección</h2></div><button className="icon-button" onClick={() => setSectionOpen(false)}><X size={19} /></button></div><label className="field-label">Nombre<input autoFocus value={sectionDraft} onChange={(event) => setSectionDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addProjectSection(); } }} placeholder="Ej. Ingeniería, Compras o Puesta en marcha" /></label>{sectionError && <p className="form-error">{sectionError}</p>}<div className="modal-actions"><button type="button" className="button secondary" onClick={() => setSectionOpen(false)}>Cancelar</button><button type="button" className="button primary" disabled={sectionSaving || !sectionDraft.trim()} onClick={addProjectSection}>{sectionSaving ? "Guardando..." : "Agregar sección"}</button></div></section></div>}
     </div>
   );

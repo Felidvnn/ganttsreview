@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, AlertTriangle, BarChart3, CalendarCheck, Clock3, Columns3, Download, FileCode2, FileImage, FileSpreadsheet, FileText, GanttChart, History, LayoutList, Milestone, Pencil, RefreshCw, Settings2 } from "lucide-react";
+import { Activity, AlertTriangle, ArrowUpDown, BarChart3, CalendarCheck, ClipboardCheck, Clock3, Columns3, Download, FileCode2, FileImage, FileSpreadsheet, FileText, GanttChart, History, LayoutList, MessageSquareText, Milestone, Pencil, RefreshCw, Settings2 } from "lucide-react";
 import { differenceInCalendarDays, format } from "date-fns";
 import { es } from "date-fns/locale";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -8,16 +8,19 @@ import type { Project, Task, TaskStatus } from "@/lib/types";
 import { defaultProjectStatuses, statusLabel, type ProjectTaskStatus } from "@/lib/task-statuses";
 import { defaultProjectTaskTypes, taskTypeLabel, type ProjectTaskType } from "@/lib/task-types";
 import { taskDisplayColor, type TaskColorMode } from "@/lib/task-colors";
-import { applyTaskRollups, sortTasksByDate, taskDateKey, taskDepth, taskDisplaySection, taskHierarchyPath } from "@/lib/task-order";
+import { applyTaskRollups, sortTasksByDate, sortTasksManual, taskDepth, taskDisplaySection, taskHierarchyPath } from "@/lib/task-order";
 import { createClient, hasSupabaseConfig } from "@/lib/supabase/client";
 import { GanttBoard } from "./gantt-board";
 import { ProjectDelays } from "./project-delays";
+import { ProjectFollowups } from "./project-followups";
+import { ProjectNotes } from "./project-notes";
+import { ProjectPlanOrder } from "./project-plan-order";
 import { ProjectStatusSettings } from "./project-status-settings";
 import { ProjectTypeSettings } from "./project-type-settings";
 import { TaskBadge } from "./status";
 import { TaskEditor, type AssignableMember } from "./task-editor";
 
-type ProjectView = "gantt" | "list" | "board" | "milestones" | "delays" | "reports" | "activity";
+type ProjectView = "gantt" | "list" | "board" | "milestones" | "followups" | "notes" | "delays" | "reports" | "activity";
 type ActivityRow = { id: number; actor_name: string; action: string; entity_title: string; created_at: string };
 
 const actionLabels: Record<string, string> = { insert: "creó", update: "actualizó", delete: "eliminó" };
@@ -64,7 +67,8 @@ function excelWorkbook(project: Project, tasks: Task[], statuses: ProjectTaskSta
 }
 
 export function ProjectWorkspace({ project, initialTasks, canEdit }: { project: Project; initialTasks: Task[]; canEdit: boolean }) {
-  const [tasks, setTasks] = useState(() => sortTasksByDate(initialTasks));
+  const [orderMode, setOrderMode] = useState<"date" | "manual">(project.taskOrderMode || "date");
+  const [tasks, setTasks] = useState(() => project.taskOrderMode === "manual" ? sortTasksManual(initialTasks) : sortTasksByDate(initialTasks));
   const [view, setView] = useState<ProjectView>("gantt");
   const [colorMode, setColorMode] = useState<TaskColorMode>("manual");
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
@@ -76,18 +80,16 @@ export function ProjectWorkspace({ project, initialTasks, canEdit }: { project: 
   const [projectTaskTypes, setProjectTaskTypes] = useState<ProjectTaskType[]>(defaultProjectTaskTypes);
   const [statusSettingsOpen, setStatusSettingsOpen] = useState(false);
   const [typeSettingsOpen, setTypeSettingsOpen] = useState(false);
-  const sections = useMemo(() => Array.from(new Set(tasks.map((task) => task.section))).sort((left, right) => {
-    const leftTask = tasks.find((task) => task.section === left);
-    const rightTask = tasks.find((task) => task.section === right);
-    return (leftTask ? taskDateKey(leftTask) : "9999-12-31").localeCompare(rightTask ? taskDateKey(rightTask) : "9999-12-31");
-  }), [tasks]);
+  const [orderSettingsOpen, setOrderSettingsOpen] = useState(false);
+  const [projectSections, setProjectSections] = useState<string[]>(() => Array.from(new Set(initialTasks.map((task) => task.section))));
+  const sections = useMemo(() => [...projectSections, ...Array.from(new Set(tasks.map((task) => task.section))).filter((name) => !projectSections.includes(name))], [projectSections, tasks]);
   const milestones = tasks.filter((task) => task.isMilestone);
   const completedTasks = tasks.filter((task) => task.status === "done").length;
   const progressBasis = tasks.filter((task) => !task.parentId);
   const currentProgress = progressBasis.length ? Math.round(progressBasis.reduce((sum, task) => sum + task.progress, 0) / progressBasis.length) : 0;
   const nextMilestone = milestones.filter((task) => task.status !== "done" && task.dueDate).sort((left, right) => left.dueDate!.localeCompare(right.dueDate!))[0];
   const milestoneDays = nextMilestone?.dueDate ? differenceInCalendarDays(new Date(`${nextMilestone.dueDate}T12:00:00`), new Date()) : null;
-  const handleTasksChange = useCallback((nextTasks: Task[]) => setTasks(applyTaskRollups(nextTasks)), []);
+  const handleTasksChange = useCallback((nextTasks: Task[]) => setTasks(applyTaskRollups(nextTasks, orderMode)), [orderMode]);
   const statusColumns = useMemo(() => projectStatuses.filter((item) => item.enabled).sort((left, right) => left.sortOrder - right.sortOrder).map((item) => ({ value: item.status, label: item.label })), [projectStatuses]);
 
   useEffect(() => {
@@ -98,10 +100,12 @@ export function ProjectWorkspace({ project, initialTasks, canEdit }: { project: 
       supabase.from("project_task_statuses").select("status,label,color,enabled,sort_order").eq("project_id", project.id).order("sort_order"),
       supabase.from("project_external_assignees").select("id,name").eq("project_id", project.id).order("name"),
       supabase.from("project_task_types").select("id,name,color,sort_order").eq("project_id", project.id).order("sort_order"),
-    ]).then(([memberResult, statusResult, externalResult, typeResult]) => {
+      supabase.from("project_sections").select("name,sort_order").eq("project_id", project.id).order("sort_order"),
+    ]).then(([memberResult, statusResult, externalResult, typeResult, sectionResult]) => {
       setMembers([...(memberResult.data || []) as AssignableMember[], ...((externalResult.data || []).map((item) => ({ user_id: `external:${item.id}`, full_name: item.name, email: "Responsable del proyecto" })))]);
       if (statusResult.data?.length) setProjectStatuses(statusResult.data.map((row) => ({ status: row.status as TaskStatus, label: row.label, color: row.color, enabled: row.enabled, sortOrder: row.sort_order })));
       if (typeResult.data?.length) setProjectTaskTypes(typeResult.data.map((row) => ({ id: row.id, name: row.name, color: row.color, sortOrder: row.sort_order })));
+      if (sectionResult.data?.length) setProjectSections(sectionResult.data.map((row) => row.name));
     });
   }, [project.id]);
 
@@ -120,17 +124,18 @@ export function ProjectWorkspace({ project, initialTasks, canEdit }: { project: 
     if (!name) return;
     setMembers((current) => current.some((member) => member.user_id.startsWith("external:") && member.full_name.toLowerCase() === name.toLowerCase()) ? current : [...current, { user_id: directoryId ? `external:${directoryId}` : `external:local-${encodeURIComponent(name.toLowerCase())}`, full_name: name, email: "Responsable del proyecto" }]);
   };
-  const updateLocalTask = (updated: Task) => { setTasks((current) => applyTaskRollups(current.map((task) => task.id === updated.id ? updated : task))); rememberLocalExternal(updated.manualAssignee, updated.directoryAssigneeIds?.[0]); setSelectedTask(updated); };
-  const createLocalTask = (created: Task) => { setTasks((current) => applyTaskRollups([...current, created])); rememberLocalExternal(created.manualAssignee, created.directoryAssigneeIds?.[0]); };
+  const updateLocalTask = (updated: Task) => { setTasks((current) => applyTaskRollups(current.map((task) => task.id === updated.id ? updated : task), orderMode)); rememberLocalExternal(updated.manualAssignee, updated.directoryAssigneeIds?.[0]); setSelectedTask(updated); };
+  const createLocalTask = (created: Task) => { setTasks((current) => applyTaskRollups([...current, created], orderMode)); rememberLocalExternal(created.manualAssignee, created.directoryAssigneeIds?.[0]); };
   const deleteLocalTask = (taskId: string) => {
     setTasks((current) => {
       const removed = new Set([taskId]);
       let changed = true;
       while (changed) { changed = false; current.forEach((task) => { if (task.parentId && removed.has(task.parentId) && !removed.has(task.id)) { removed.add(task.id); changed = true; } }); }
-      return applyTaskRollups(current.filter((task) => !removed.has(task.id)));
+      return applyTaskRollups(current.filter((task) => !removed.has(task.id)), orderMode);
     });
     setSelectedTask(null);
   };
+  const savePlanOrder = (nextSections: string[], nextTasks: Task[], nextMode: "date" | "manual") => { setProjectSections(nextSections); setOrderMode(nextMode); setTasks(nextTasks); };
 
   const exportExcel = () => downloadBlob(`${project.code}-planificacion.xls`, excelWorkbook(project, tasks, projectStatuses), "application/vnd.ms-excel;charset=utf-8");
   const exportHtml = () => downloadBlob(`${project.code}-informe.html`, polishedReportHtml(project, tasks, projectStatuses), "text/html;charset=utf-8");
@@ -189,16 +194,20 @@ export function ProjectWorkspace({ project, initialTasks, canEdit }: { project: 
       <button className={view === "list" ? "active" : ""} onClick={() => setView("list")}><LayoutList size={14} /> Lista</button>
       <button className={view === "board" ? "active" : ""} onClick={() => setView("board")}><Columns3 size={14} /> Tablero</button>
       <button className={view === "milestones" ? "active" : ""} onClick={() => setView("milestones")}><Milestone size={14} /> Hitos <span>{milestones.length}</span></button>
+      <button className={view === "followups" ? "active" : ""} onClick={() => setView("followups")}><ClipboardCheck size={14} /> Pendientes</button>
+      <button className={view === "notes" ? "active" : ""} onClick={() => setView("notes")}><MessageSquareText size={14} /> Notas</button>
       <button className={view === "delays" ? "active" : ""} onClick={() => setView("delays")}><History size={14} /> Atrasos <span>{tasks.filter((task) => task.dueDate && ((task.actualCompletionDate && task.actualCompletionDate > task.dueDate) || (!task.actualCompletionDate && task.status !== "done" && task.dueDate < new Date().toISOString().slice(0, 10)))).length}</span></button>
       <button className={view === "reports" ? "active" : ""} onClick={() => setView("reports")}><Download size={14} /> Informes</button>
       <button className={view === "activity" ? "active" : ""} onClick={() => setView("activity")}><Activity size={14} /> Actividad</button>
     </nav>
-    <div className="project-view-actions"><div><label className="toolbar-select color-mode-select"><BarChart3 size={15} /> Colorear por <select value={colorMode} onChange={(event) => setColorMode(event.target.value as TaskColorMode)}><option value="manual">Color manual</option><option value="owner">Responsable</option><option value="section">Sección/tema</option><option value="status">Estado</option></select></label>{canEdit && <button className="toolbar-select" onClick={() => setStatusSettingsOpen(true)}><Settings2 size={15} /> Estados</button>}{canEdit && <button className="toolbar-select" onClick={() => setTypeSettingsOpen(true)}><Settings2 size={15} /> Tipos</button>}</div><div><button className="toolbar-select" onClick={exportExcel}><FileSpreadsheet size={15} /> Excel</button><button className="toolbar-select" onClick={exportPdf}><FileText size={15} /> PDF</button></div></div>
+    <div className="project-view-actions"><div><label className="toolbar-select color-mode-select"><BarChart3 size={15} /> Colorear por <select value={colorMode} onChange={(event) => setColorMode(event.target.value as TaskColorMode)}><option value="manual">Color manual</option><option value="owner">Responsable</option><option value="section">Sección/tema</option><option value="status">Estado</option></select></label>{canEdit && <button className="toolbar-select" onClick={() => setStatusSettingsOpen(true)}><Settings2 size={15} /> Estados</button>}{canEdit && <button className="toolbar-select" onClick={() => setTypeSettingsOpen(true)}><Settings2 size={15} /> Tipos</button>}{canEdit && <button className="toolbar-select" onClick={() => setOrderSettingsOpen(true)}><ArrowUpDown size={15} /> Ordenar</button>}</div><div><button className="toolbar-select" onClick={exportExcel}><FileSpreadsheet size={15} /> Excel</button><button className="toolbar-select" onClick={exportPdf}><FileText size={15} /> PDF</button></div></div>
 
-    {view === "gantt" && <GanttBoard initialTasks={tasks} projectId={project.id} timelineStart={project.startDate} readOnly={!canEdit} colorMode={colorMode} projectStatuses={projectStatuses} projectTaskTypes={projectTaskTypes} onTasksChange={handleTasksChange} onOpenTask={setSelectedTask} />}
+    {view === "gantt" && <GanttBoard initialTasks={tasks} projectId={project.id} timelineStart={project.startDate} readOnly={!canEdit} colorMode={colorMode} projectStatuses={projectStatuses} projectTaskTypes={projectTaskTypes} taskOrderMode={orderMode} sectionOrder={sections} onTasksChange={handleTasksChange} onOpenTask={setSelectedTask} />}
     {view === "list" && <section className="panel project-task-list"><div className="task-list-row task-list-head"><span>Tarea</span><span>Responsable</span><span>Estado</span><span>Avance</span><span>Fecha</span><span /></div>{tasks.map((task) => <article className="task-list-row" key={task.id}><div><i style={{ background: taskDisplayColor(task, colorMode) }} /><span><b>{task.title}</b><small>{taskTypeLabel(task.taskTypeId, projectTaskTypes, task.isMilestone)} · {task.section}{task.description ? ` · ${task.description}` : ""}</small></span></div><span>{task.owner.name}</span><TaskBadge status={task.status} /><div className="list-progress"><span><i style={{ width: `${task.progress}%`, background: taskDisplayColor(task, colorMode) }} /></span><b>{task.progress}%</b></div><span>{task.dueDate || "Sin fecha"}</span><button className="icon-button" onClick={() => setSelectedTask(task)} title="Abrir tarea"><Pencil size={15} /></button></article>)}{!tasks.length && <div className="view-empty">No hay tareas en este proyecto.</div>}</section>}
     {view === "board" && <section className="project-board">{statusColumns.map((column) => { const columnTasks = tasks.filter((task) => task.status === column.value); return <div className="board-column" key={column.value}><header><span>{column.label}</span><b>{columnTasks.length}</b></header><div>{columnTasks.map((task) => <button className="board-task-card" key={task.id} onClick={() => setSelectedTask(task)} style={{ borderTopColor: taskDisplayColor(task, colorMode) }}><small>{task.section}</small><b>{task.title}</b><span><i style={{ width: `${task.progress}%`, background: taskDisplayColor(task, colorMode) }} /></span><footer><span>{task.owner.name}</span><strong>{task.progress}%</strong></footer></button>)}{!columnTasks.length && <span className="board-empty">Sin tareas</span>}</div></div>; })}</section>}
     {view === "milestones" && <section className="milestone-view">{milestones.map((task) => <button className="milestone-view-card" key={task.id} onClick={() => setSelectedTask(task)}><span style={{ background: taskDisplayColor(task, colorMode) }}><Milestone /></span><div><small>{task.section}</small><h3>{task.title}</h3><p>{task.description || "Sin descripción"}</p><footer><TaskBadge status={task.status} /><b><CalendarCheck size={14} /> {task.dueDate || "Sin fecha"}</b></footer></div></button>)}{!milestones.length && <div className="view-empty"><Milestone /><b>No hay hitos</b><span>Crea un hito desde la vista Gantt.</span></div>}</section>}
+    {view === "followups" && <ProjectFollowups projectId={project.id} tasks={tasks} canEdit={canEdit} />}
+    {view === "notes" && <ProjectNotes projectId={project.id} tasks={tasks} canEdit={canEdit} onNavigate={(target) => setView(target)} onOpenTask={setSelectedTask} />}
     {view === "delays" && <ProjectDelays projectId={project.id} tasks={tasks} canEdit={canEdit} onOpenTask={setSelectedTask} />}
     {view === "reports" && <section className="report-grid"><button onClick={exportPdf}><span className="report-icon pdf"><FileText /></span><div><b>Informe PDF</b><small>Abre la versión imprimible para guardar como PDF.</small></div><Download /></button><button onClick={exportHtml}><span className="report-icon html"><FileCode2 /></span><div><b>Informe HTML</b><small>Documento autocontenido para compartir o archivar.</small></div><Download /></button><button onClick={exportPng}><span className="report-icon image"><FileImage /></span><div><b>Imagen PNG</b><small>Captura gráfica del cronograma y sus cápsulas.</small></div><Download /></button><button onClick={exportExcel}><span className="report-icon csv"><FileSpreadsheet /></span><div><b>Libro Excel</b><small>Jerarquía, prioridad, fechas, responsables y avance.</small></div><Download /></button></section>}
     {view === "activity" && <section className="panel project-activity"><header><div><span className="eyebrow">TRAZABILIDAD</span><h3>Actividad del proyecto</h3></div><button className="icon-button" onClick={loadActivity} disabled={activityLoading}><RefreshCw size={16} className={activityLoading ? "spin" : ""} /></button></header>{activityError && <p className="form-error">{activityError}</p>}<div>{activityRows.map((row) => <article key={row.id}><span className={`activity-dot action-${row.action}`} /> <div><b>{row.actor_name}</b> {actionLabels[row.action] || row.action} <strong>{row.entity_title}</strong><small>{format(new Date(row.created_at), "dd MMM yyyy · HH:mm", { locale: es })}</small></div></article>)}{!activityRows.length && !activityLoading && !activityError && <div className="view-empty"><Activity /><b>Sin actividad registrada</b></div>}{activityLoading && <div className="view-empty"><RefreshCw className="spin" /> Cargando actividad…</div>}</div></section>}
@@ -206,5 +215,6 @@ export function ProjectWorkspace({ project, initialTasks, canEdit }: { project: 
     {selectedTask && <TaskEditor key={selectedTask.id} task={tasks.find((task) => task.id === selectedTask.id) || selectedTask} allTasks={tasks} sections={sections.length ? sections : ["General"]} members={members} canEdit={canEdit} projectStatuses={projectStatuses} projectTaskTypes={projectTaskTypes} onClose={() => setSelectedTask(null)} onUpdated={updateLocalTask} onCreated={createLocalTask} onDeleted={deleteLocalTask} onSelectTask={setSelectedTask} />}
     <ProjectStatusSettings projectId={project.id} options={projectStatuses} open={statusSettingsOpen} onClose={() => setStatusSettingsOpen(false)} onSaved={setProjectStatuses} />
     <ProjectTypeSettings projectId={project.id} options={projectTaskTypes} open={typeSettingsOpen} onClose={() => setTypeSettingsOpen(false)} onSaved={setProjectTaskTypes} />
+    <ProjectPlanOrder projectId={project.id} sections={sections} tasks={tasks} orderMode={orderMode} open={orderSettingsOpen} onClose={() => setOrderSettingsOpen(false)} onSaved={savePlanOrder} />
   </>;
 }

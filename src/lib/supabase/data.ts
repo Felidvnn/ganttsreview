@@ -3,7 +3,7 @@ import { differenceInCalendarDays, format } from "date-fns";
 import { es } from "date-fns/locale";
 import { people, projects as demoProjects, tasks as demoTasks } from "@/lib/demo-data";
 import type { Person, Project, ProjectHealth, Task, TaskStatus } from "@/lib/types";
-import { sortTasksByDate } from "@/lib/task-order";
+import { sortTasksByDate, sortTasksManual } from "@/lib/task-order";
 import { hasSupabaseConfig } from "./client";
 import { createServerSupabaseClient } from "./server";
 
@@ -14,6 +14,7 @@ type DbProject = {
   id: string; workspace_id: string; name: string; code: string; description: string; progress: number; health: string;
   due_date: string | null; start_date: string | null; color: string; visibility: string;
   created_by?: string;
+  task_order_mode?: "date" | "manual";
   creator?: DbProfile | DbProfile[] | null; project_members?: DbMember[]; tasks?: DbTaskCount[];
 };
 type DbAssignee = { user_id?: string; profiles?: DbProfile | DbProfile[] | null };
@@ -23,6 +24,7 @@ type DbTask = {
   due_date: string | null; actual_completion_date?: string | null; progress: number; task_assignees?: DbAssignee[]; task_directory_assignees?: DbDirectoryAssignee[];
   is_milestone?: boolean; color?: string; manual_assignee?: string | null; rollup_progress?: boolean; priority?: number;
   task_type_id?: string | null; project_task_types?: { id: string; name: string; color: string } | { id: string; name: string; color: string }[] | null;
+  sort_order?: number;
 };
 
 function oneProfile(value: DbProfile | DbProfile[] | null | undefined) {
@@ -65,6 +67,7 @@ function mapProject(row: DbProject): Project {
     tasksDone: projectTasks.filter((task) => task.status === "done").length, tasksTotal: projectTasks.length, visibility,
     milestonesDone: milestones.filter((task) => task.status === "done").length, milestonesTotal: milestones.length,
     blockedTasks: projectTasks.filter((task) => task.status === "blocked").length,
+    taskOrderMode: row.task_order_mode ?? "date",
   };
 }
 
@@ -125,8 +128,9 @@ export async function getProjectBundle(id: string): Promise<{ project: Project; 
       startDate: row.start_date ?? "", color: row.color ?? "#2f7669",
       owners, assigneeId: row.task_assignees?.[0]?.user_id, assigneeIds: row.task_assignees?.map((assignment) => assignment.user_id).filter((id): id is string => Boolean(id)), directoryAssigneeIds: row.task_directory_assignees?.map((assignment) => assignment.assignee_id).filter((id): id is string => Boolean(id)), manualAssignee: row.manual_assignee ?? undefined,
       taskTypeId: row.task_type_id ?? undefined, taskTypeName: taskType?.name, taskTypeColor: taskType?.color,
+      sortOrder: row.sort_order,
       overdue: Boolean(row.due_date && dueDate < new Date() && row.status !== "done"),
     };
   });
-  return { project, tasks: sortTasksByDate(mappedTasks), canEdit, isOwner };
+  return { project, tasks: project.taskOrderMode === "manual" ? sortTasksManual(mappedTasks) : sortTasksByDate(mappedTasks), canEdit, isOwner };
 }

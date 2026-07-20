@@ -15,6 +15,15 @@ function compareTasks(left: Task, right: Task) {
 // Dates order siblings, never generations. A child is always emitted immediately
 // after its parent (and after older siblings), regardless of its own schedule.
 export function sortTasksByDate(tasks: Task[]) {
+  return sortTaskTree(tasks, compareTasks);
+}
+
+function compareManual(left: Task, right: Task) {
+  const order = (left.sortOrder ?? Number.MAX_SAFE_INTEGER) - (right.sortOrder ?? Number.MAX_SAFE_INTEGER);
+  return order || left.title.localeCompare(right.title, "es", { sensitivity: "base" });
+}
+
+function sortTaskTree(tasks: Task[], compare: (left: Task, right: Task) => number) {
   const byId = new Map(tasks.map((task) => [task.id, task]));
   const children = new Map<string, Task[]>();
   const roots: Task[] = [];
@@ -30,11 +39,15 @@ export function sortTasksByDate(tasks: Task[]) {
   const visit = (task: Task) => {
     if (visited.has(task.id)) return;
     visited.add(task.id); ordered.push(task);
-    [...(children.get(task.id) ?? [])].sort(compareTasks).forEach(visit);
+    [...(children.get(task.id) ?? [])].sort(compare).forEach(visit);
   };
-  [...roots].sort(compareTasks).forEach(visit);
-  [...tasks].filter((task) => !visited.has(task.id)).sort(compareTasks).forEach(visit);
+  [...roots].sort(compare).forEach(visit);
+  [...tasks].filter((task) => !visited.has(task.id)).sort(compare).forEach(visit);
   return ordered;
+}
+
+export function sortTasksManual(tasks: Task[]) {
+  return sortTaskTree(tasks, compareManual);
 }
 
 export function taskDisplaySection(task: Task, tasks: Task[]) {
@@ -75,7 +88,7 @@ export function taskDepth(task: Task, tasks: Task[]) {
   return depth;
 }
 
-export function applyTaskRollups(tasks: Task[]) {
+export function applyTaskRollups(tasks: Task[], orderMode: "date" | "manual" = "date") {
   const result = tasks.map((task) => ({ ...task }));
   [...result].sort((left, right) => taskDepth(right, result) - taskDepth(left, result)).forEach((task) => {
     if (!task.rollupProgress) return;
@@ -85,5 +98,5 @@ export function applyTaskRollups(tasks: Task[]) {
     task.progress = progress;
     task.status = progress === 100 ? "done" : task.status === "done" ? "progress" : task.status;
   });
-  return sortTasksByDate(result);
+  return orderMode === "manual" ? sortTasksManual(result) : sortTasksByDate(result);
 }

@@ -35,6 +35,7 @@ export type Project = {
   blockedTasks?: number;
   visibility: "Colaborativo" | "Con líder" | "Privado";
   visibilityKey: "workspace" | "shared" | "private";
+  taskOrderMode?: "date" | "manual";
 };
 
 export type Task = {
@@ -64,6 +65,7 @@ export type Task = {
   taskTypeId?: string;
   taskTypeName?: string;
   taskTypeColor?: string;
+  sortOrder?: number;
   overdue?: boolean;
   blockedBy?: string;
   section: string;

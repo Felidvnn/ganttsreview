@@ -1,12 +1,13 @@
 "use client";
 
-import { CalendarDays, CheckSquare2, Download, FileSpreadsheet, FolderKanban, Milestone, Plus, Upload, X } from "lucide-react";
+import { CalendarDays, Check, CheckSquare2, Download, FileSpreadsheet, FolderKanban, Milestone, Plus, Upload, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { projects as demoProjects } from "@/lib/demo-data";
 import { createClient, hasSupabaseConfig } from "@/lib/supabase/client";
 
 type ProjectOption = { id: string; name: string };
+type QuickMember = { user_id: string; full_name: string; email: string };
 type ImportTaskRow = { ref: string; parentRef: string; section: string; title: string; type: string; startDate: string; dueDate: string; actualDate: string; milestone: boolean; status: string; priority: number; progress: number; owner: string; description: string };
 const suggestedSections = ["General", "Planificación", "Ejecución", "Cierre"];
 const importHeaders = ["ID", "ID padre", "Sección", "Tarea", "Tipo", "Inicio", "Fin", "Fecha real", "Hito", "Estado", "Prioridad", "Avance", "Responsable", "Descripción"];
@@ -51,6 +52,9 @@ export function QuickCreate({ open, onClose }: { open: boolean; onClose: () => v
   const [importRows, setImportRows] = useState<ImportTaskRow[]>([]);
   const [importFileName, setImportFileName] = useState("");
   const [importBusy, setImportBusy] = useState(false);
+  const [quickMembers, setQuickMembers] = useState<QuickMember[]>([]);
+  const [selectedQuickAssignees, setSelectedQuickAssignees] = useState<string[]>([]);
+  const [newQuickAssignee, setNewQuickAssignee] = useState("");
 
   useEffect(() => {
     if (!open || !hasSupabaseConfig) return;
@@ -80,6 +84,7 @@ export function QuickCreate({ open, onClose }: { open: boolean; onClose: () => v
       for (const project of options) if (!grouped[project.id].length) grouped[project.id] = ["General"];
       setSectionsByProject(grouped);
       setSection(grouped[firstId]?.[0] ?? "General");
+      if (firstId) loadQuickAssignees(firstId);
     };
     load();
     return () => { active = false; };
@@ -87,11 +92,22 @@ export function QuickCreate({ open, onClose }: { open: boolean; onClose: () => v
 
   if (!open) return null;
 
+  const loadQuickAssignees = async (targetProject: string) => {
+    if (!hasSupabaseConfig || !targetProject) return;
+    const supabase = createClient()!;
+    const [members, directory] = await Promise.all([
+      supabase.rpc("get_project_assignable_members", { target_project: targetProject }),
+      supabase.from("project_external_assignees").select("id,name").eq("project_id", targetProject).order("name"),
+    ]);
+    setQuickMembers([...(members.data || []) as QuickMember[], ...(directory.data || []).map((item) => ({ user_id: `external:${item.id}`, full_name: item.name, email: "Responsable del proyecto" }))]);
+  };
+
   const changeProject = (nextProject: string) => {
     setProjectId(nextProject);
     setSection(sectionsByProject[nextProject]?.[0] ?? "General");
-    setAddingSection(false); setNewSectionDraft("");
+    setAddingSection(false); setNewSectionDraft(""); setSelectedQuickAssignees([]); setNewQuickAssignee(""); loadQuickAssignees(nextProject);
   };
+  const toggleQuickAssignee = (id: string) => setSelectedQuickAssignees((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
 
   const addInitialSection = () => {
     const clean = initialSectionDraft.trim();
@@ -186,18 +202,20 @@ export function QuickCreate({ open, onClose }: { open: boolean; onClose: () => v
         const dueDate = String(form.get("due_date") || "");
         const requestedStart = String(form.get("start_date") || "");
         const startDate = kind === "milestone" ? dueDate || new Date().toISOString().slice(0, 10) : requestedStart || new Date().toISOString().slice(0, 10);
-        const { data: task, error: insertError } = await supabase.from("tasks").insert({
-          project_id: projectId, title: name, section, start_date: startDate,
-          due_date: dueDate || (kind === "milestone" ? startDate : null), is_milestone: kind === "milestone", created_by: user.id,
-        }).select("id").single();
-        if (insertError) { setError(insertError.message); setSaving(false); return; }
-        await supabase.from("task_assignees").insert({ task_id: task.id, user_id: user.id, assigned_by: user.id });
+        const selectedUsers = selectedQuickAssignees.filter((id) => !id.startsWith("external:"));
+        const selectedDirectory = selectedQuickAssignees.filter((id) => id.startsWith("external:")).map((id) => id.replace("external:", ""));
+        const { error: insertError } = await supabase.rpc("create_task_with_assignees", {
+          target_project: projectId, task_title: name, task_section: section, task_start: startDate,
+          task_due: dueDate || (kind === "milestone" ? startDate : null), task_is_milestone: kind === "milestone",
+          target_users: selectedUsers, target_directory_assignees: selectedDirectory, new_assignee_name: newQuickAssignee.trim() || null,
+        });
+        if (insertError) { setError(insertError.code === "PGRST202" ? "Falta aplicar la migración 202607200019_project_notes_ordering_bulk_copy.sql." : insertError.message); setSaving(false); return; }
       }
     }
     setCreated(true); router.refresh();
     setTimeout(() => {
       setCreated(false); setSaving(false); setName(""); setDescription(""); setProjectStart(""); setProjectDue("");
-      setVisibility("private"); setInitialSections(suggestedSections); setImportRows([]); setImportFileName(""); onClose();
+      setVisibility("private"); setInitialSections(suggestedSections); setImportRows([]); setImportFileName(""); setSelectedQuickAssignees([]); setNewQuickAssignee(""); onClose();
     }, 800);
   };
 
@@ -235,6 +253,7 @@ export function QuickCreate({ open, onClose }: { open: boolean; onClose: () => v
                 {kind === "task" && <label className="field-label">Fecha de inicio<input name="start_date" type="date" /></label>}
                 <label className="field-label">{kind === "milestone" ? "Fecha del hito" : "Fecha límite"}<div className="input-icon"><CalendarDays size={16} /><input name="due_date" type="date" /></div></label>
               </div>
+              <div className="multi-assignee-field quick-assignee-field"><span>Responsables</span><div>{quickMembers.map((member) => { const selected = selectedQuickAssignees.includes(member.user_id); return <button type="button" className={selected ? "selected" : ""} aria-pressed={selected} onClick={() => toggleQuickAssignee(member.user_id)} key={member.user_id}><i>{member.full_name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "?"}</i><b>{member.full_name || member.email}</b><Check size={12} /></button>; })}{!quickMembers.length && <small>No hay integrantes ni responsables guardados.</small>}</div><label className="new-project-assignee"><span>Agregar responsable del proyecto</span><input value={newQuickAssignee} onChange={(event) => setNewQuickAssignee(event.target.value)} placeholder="Nombre de proveedor, contacto o apoyo" /><small>Quedará disponible para las próximas tareas.</small></label></div>
             </>}
 
             {error && <p className="form-error">{error}</p>}
