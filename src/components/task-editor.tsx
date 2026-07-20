@@ -3,7 +3,7 @@
 import { AlertTriangle, Check, Link2, ListTree, Plus, Save, Trash2, UserRound, X } from "lucide-react";
 import { differenceInCalendarDays, format } from "date-fns";
 import { es } from "date-fns/locale";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Person, Task, TaskDependency, TaskStatus } from "@/lib/types";
 import { defaultProjectStatuses, type ProjectTaskStatus } from "@/lib/task-statuses";
 import { sortTasksByDate, taskDepth } from "@/lib/task-order";
@@ -61,7 +61,10 @@ export function TaskEditor({ task, allTasks, sections, members, canEdit, project
     ...(task.assigneeIds ?? (task.assigneeId ? [task.assigneeId] : [])),
     ...(task.directoryAssigneeIds ?? (rememberedOwner ? [rememberedOwner.user_id.replace("external:", "")] : [])).map((id) => `external:${id}`),
   ]);
-  const [manualOwner, setManualOwner] = useState(task.manualAssignee || "");
+  // This input creates a new reusable project contact. Existing assignees are
+  // represented by the checked options above, so pre-filling it duplicated the
+  // first saved assignee and also changed the form geometry after each click.
+  const [manualOwner, setManualOwner] = useState("");
   const [priority, setPriority] = useState<1 | 2 | 3>(task.priority || 2);
   const [privateNote, setPrivateNote] = useState("");
   const [dependencies, setDependencies] = useState<TaskDependency[]>([]);
@@ -80,9 +83,19 @@ export function TaskEditor({ task, allTasks, sections, members, canEdit, project
   const [busy, setBusy] = useState(false);
   const [loadingContext, setLoadingContext] = useState(true);
   const [error, setError] = useState("");
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
   const statusOptions = projectStatuses.filter((item) => item.enabled || item.status === status).map((item) => ({ value: item.status, label: item.label }));
   const chosenMembers = useMemo(() => members.filter((member) => selectedAssignees.includes(member.user_id)), [members, selectedAssignees]);
-  const toggleAssignee = (id: string) => setSelectedAssignees((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  const toggleAssignee = (id: string) => {
+    // Keep the drawer's main scroll completely independent from selection.
+    // Native hidden checkboxes can make Chromium scroll their containing form
+    // when focused, especially when there are two nested scroll areas.
+    const scrollTop = scrollAreaRef.current?.scrollTop ?? 0;
+    setSelectedAssignees((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+    requestAnimationFrame(() => {
+      if (scrollAreaRef.current) scrollAreaRef.current.scrollTop = scrollTop;
+    });
+  };
   const currentDepth = taskDepth(task, allTasks);
   const directChildren = sortTasksByDate(allTasks.filter((item) => item.parentId === task.id));
   const directChildIds = new Set(directChildren.map((item) => item.id));
@@ -266,14 +279,14 @@ export function TaskEditor({ task, allTasks, sections, members, canEdit, project
         <button type="button" className={activePanel === "notes" ? "active" : ""} onClick={() => setActivePanel("notes")}>Mis apuntes</button>
       </nav>
       <form className="task-editor-form" onSubmit={save}>
-        <div className="task-editor-scroll">
+        <div className="task-editor-scroll" ref={scrollAreaRef}>
           {activePanel === "details" && <div className="task-editor-main">
             <label className="field-label">Nombre<input value={title} onChange={(event) => setTitle(event.target.value)} disabled={!canEdit} required /></label>
             <label className="field-label">Descripción compartida<textarea value={description} onChange={(event) => setDescription(event.target.value)} disabled={!canEdit} rows={4} placeholder="Contexto, entregables y criterios de aceptación…" /></label>
             <div className="form-grid"><label className="field-label">Sección<select value={section} onChange={(event) => setSection(event.target.value)} disabled={!canEdit}>{sections.map((item) => <option value={item} key={item}>{item}</option>)}</select></label><label className="field-label">Estado<select value={status} onChange={(event) => { const next = event.target.value as TaskStatus; setStatus(next); if (next === "done") setProgress(100); else setActualCompletionDate(""); }} disabled={!canEdit}>{statusOptions.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></label></div>
             <div className="form-grid three-dates"><label className="field-label">Inicio<input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} disabled={!canEdit} /></label><label className="field-label">Fecha límite<input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} disabled={!canEdit} /></label><label className={`field-label ${actualCompletionDate && dueDate && actualCompletionDate > dueDate ? "actual-date-late" : ""}`}>Fecha real<input type="date" value={actualCompletionDate} onChange={(event) => { setActualCompletionDate(event.target.value); if (event.target.value) { setStatus("done"); setProgress(100); } }} disabled={!canEdit} /><small>{actualCompletionDate && dueDate && actualCompletionDate > dueDate ? `${differenceInCalendarDays(new Date(`${actualCompletionDate}T12:00:00`), new Date(`${dueDate}T12:00:00`))} días después del límite` : "Cierre efectivo"}</small></label></div>
             <label className={`progress-editor ${rollupEnabled ? "calculated" : ""}`}><span><b>{rollupEnabled ? "Avance calculado desde subtareas" : "Avance de la tarea"}</b><output>{progress}%</output></span><input type="range" min="0" max="100" step="5" value={progress} onChange={(event) => { const next = Number(event.target.value); setProgress(next); if (next === 100) setStatus("done"); else if (status === "done") { setStatus("progress"); setActualCompletionDate(""); } }} disabled={!canEdit || rollupEnabled} /><i style={{ width: `${progress}%`, background: color }} /></label>
-            <div className="form-grid assignee-priority-grid"><div className="multi-assignee-field"><span>Responsables</span><div>{members.map((member) => <label className={selectedAssignees.includes(member.user_id) ? "selected" : ""} key={member.user_id}><input type="checkbox" checked={selectedAssignees.includes(member.user_id)} onChange={() => toggleAssignee(member.user_id)} disabled={!canEdit} /><i>{initials(member.full_name)}</i><b>{member.full_name || member.email}</b><Check size={12} /></label>)}{!members.length && <small>No hay integrantes ni responsables guardados.</small>}</div><label className="new-project-assignee"><span>Agregar responsable del proyecto</span><input value={manualOwner} onChange={(event) => setManualOwner(event.target.value)} disabled={!canEdit} placeholder="Nombre de proveedor, contacto o apoyo" /><small>Quedará disponible para las próximas tareas.</small></label></div><label className="field-label">Prioridad<select value={priority} onChange={(event) => setPriority(Number(event.target.value) as 1 | 2 | 3)} disabled={!canEdit}><option value={1}>Baja</option><option value={2}>Media</option><option value={3}>Alta</option></select></label></div>
+            <div className="form-grid assignee-priority-grid"><div className="multi-assignee-field"><span>Responsables</span><div>{members.map((member) => { const selected = selectedAssignees.includes(member.user_id); return <button type="button" className={selected ? "selected" : ""} aria-pressed={selected} onPointerDown={(event) => event.preventDefault()} onClick={() => toggleAssignee(member.user_id)} disabled={!canEdit} key={member.user_id}><i>{initials(member.full_name)}</i><b>{member.full_name || member.email}</b><Check size={12} /></button>; })}{!members.length && <small>No hay integrantes ni responsables guardados.</small>}</div><label className="new-project-assignee"><span>Agregar responsable del proyecto</span><input value={manualOwner} onChange={(event) => setManualOwner(event.target.value)} disabled={!canEdit} placeholder="Nombre de proveedor, contacto o apoyo" /><small>Quedará disponible para las próximas tareas.</small></label></div><label className="field-label">Prioridad<select value={priority} onChange={(event) => setPriority(Number(event.target.value) as 1 | 2 | 3)} disabled={!canEdit}><option value={1}>Baja</option><option value={2}>Media</option><option value={3}>Alta</option></select></label></div>
             <label className="field-label task-color-field">Color manual<input className="task-editor-color" type="color" value={color} onChange={(event) => setColor(event.target.value)} disabled={!canEdit} /></label>
             <label className="switch-row"><span><b>Es un hito</b><small>Se mostrará como un punto sin duración.</small></span><input type="checkbox" checked={isMilestone} onChange={(event) => setIsMilestone(event.target.checked)} disabled={!canEdit} /><i /></label>
           </div>}

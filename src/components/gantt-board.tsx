@@ -68,6 +68,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   const [sectionSaving, setSectionSaving] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [simpleView, setSimpleView] = useState(false);
+  const [assigneeEditorTaskId, setAssigneeEditorTaskId] = useState<string | null>(null);
   const shellRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const columnResizeRef = useRef<ColumnResizeState | null>(null);
@@ -337,6 +338,53 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
     }
   };
 
+  const toggleInlineAssignee = async (task: Task, member: AssignableMember) => {
+    const previous = items;
+    const isDirectory = member.user_id.startsWith("external:");
+    const selectedId = isDirectory ? member.user_id.replace("external:", "") : member.user_id;
+    let userIds = [...(task.assigneeIds || (task.assigneeId ? [task.assigneeId] : []))];
+    let directoryIds = [...(task.directoryAssigneeIds || [])];
+
+    // Older tasks only stored manual_assignee. Recover its directory id before
+    // toggling so editing inline never drops a previously assigned contact.
+    if (!directoryIds.length && task.manualAssignee) {
+      const legacy = members.find((item) => item.user_id.startsWith("external:") && item.full_name.localeCompare(task.manualAssignee || "", undefined, { sensitivity: "accent" }) === 0);
+      if (legacy) directoryIds = [legacy.user_id.replace("external:", "")];
+    }
+
+    if (isDirectory) directoryIds = directoryIds.includes(selectedId) ? directoryIds.filter((id) => id !== selectedId) : [...directoryIds, selectedId];
+    else userIds = userIds.includes(selectedId) ? userIds.filter((id) => id !== selectedId) : [...userIds, selectedId];
+
+    const selectedMembers = members.filter((item) => item.user_id.startsWith("external:")
+      ? directoryIds.includes(item.user_id.replace("external:", ""))
+      : userIds.includes(item.user_id));
+    const owners = selectedMembers.map((item) => item.user_id.startsWith("external:")
+      ? { ...memberPerson(item), directoryId: item.user_id.replace("external:", ""), color: "#748a82" }
+      : memberPerson(item));
+    const firstDirectory = selectedMembers.find((item) => item.user_id.startsWith("external:"));
+
+    setItems((current) => current.map((item) => item.id === task.id ? {
+      ...item,
+      owners,
+      owner: owners[0] || unassigned,
+      assigneeIds: userIds,
+      assigneeId: userIds[0],
+      directoryAssigneeIds: directoryIds,
+      manualAssignee: firstDirectory?.full_name,
+    } : item));
+
+    if (!hasSupabaseConfig) return;
+    const { error } = await createClient()!.rpc("set_task_assignees", {
+      target_task: task.id,
+      target_users: userIds,
+      target_directory_assignees: directoryIds,
+    });
+    if (error) {
+      setItems(previous);
+      setInteractionError(error.code === "PGRST202" ? "Falta aplicar la migración 202607200016_task_delays_actual_dates.sql." : error.message);
+    }
+  };
+
   const updateInlineDate = async (task: Task, field: "startDate" | "dueDate" | "actualCompletionDate", value: string) => {
     const previous = items;
     const next = { ...task, [field]: value };
@@ -549,7 +597,9 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
                 const priorityLabel = task.priority === 3 ? "Alta" : task.priority === 1 ? "Baja" : "Media";
                 const statusColor = projectStatuses.find((item) => item.status === task.status)?.color || "#68766f";
                 const taskOwners = task.owners?.length ? task.owners : [task.owner];
-                return <div data-task-drop={task.id} className={`gantt-grid gantt-task-row ${hierarchyTarget === task.id ? "hierarchy-drop-target" : ""} ${hierarchyDrag === task.id ? "hierarchy-dragging" : ""}`} key={task.id} style={gridStyle} onDragOver={(event) => { if (!hierarchyDrag || hierarchyDrag === task.id) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setHierarchyTarget(task.id); }} onDragLeave={() => setHierarchyTarget((current) => current === task.id ? null : current)} onDrop={(event) => dropOnTask(event, task.id)}>
+                const taskUserIds = task.assigneeIds || (task.assigneeId ? [task.assigneeId] : []);
+                const taskDirectoryIds = task.directoryAssigneeIds || [];
+                return <div data-task-drop={task.id} className={`gantt-grid gantt-task-row ${hierarchyTarget === task.id ? "hierarchy-drop-target" : ""} ${hierarchyDrag === task.id ? "hierarchy-dragging" : ""} ${assigneeEditorTaskId === task.id ? "assignee-row-editing" : ""}`} key={task.id} style={gridStyle} onDragOver={(event) => { if (!hierarchyDrag || hierarchyDrag === task.id) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setHierarchyTarget(task.id); }} onDragLeave={() => setHierarchyTarget((current) => current === task.id ? null : current)} onDrop={(event) => dropOnTask(event, task.id)}>
                   <div className={`gantt-task-name task-depth-${depth}`} draggable={!readOnly} onDragStart={(event) => startHierarchyDrag(event, task.id)} onDragEnd={() => { setHierarchyDrag(null); setHierarchyTarget(null); }} title={readOnly ? undefined : "Arrastra para convertirla en subtarea o moverla a una sección"}>
                     <button className={`tiny-check ${task.status === "done" ? "checked" : ""}`} disabled={readOnly} onClick={() => updatePresentation(task.id, task.status === "done" ? "todo" : "done", task.color || colors[0])} title={readOnly ? "Estado visible en modo de consulta" : "Marcar como completada"}>{task.status === "done" && <Check size={12} />}</button>
                     <span className="task-tree-control">{taskHasChildren ? <button type="button" className={`hierarchy-toggle ${depth > 0 ? "hierarchy-branch" : "hierarchy-root"} ${collapsedParents.includes(task.id) ? "collapsed" : ""}`} onClick={() => setCollapsedParents((current) => current.includes(task.id) ? current.filter((id) => id !== task.id) : [...current, task.id])} title={collapsedParents.includes(task.id) ? "Mostrar subtareas" : "Ocultar subtareas"} aria-label={collapsedParents.includes(task.id) ? "Mostrar subtareas" : "Ocultar subtareas"}>{depth > 0 ? <CornerDownRight size={13} /> : <span className="root-chevron" />}</button> : depth > 0 ? <CornerDownRight className="subtask-arrow" size={13} /> : <span className="hierarchy-spacer" />}</span>
@@ -557,7 +607,24 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
                     {!readOnly && <button type="button" className="task-duplicate-button" onClick={() => duplicateTask(task)} title="Duplicar tarea"><CopyPlus size={13} /></button>}
                     {!readOnly && colorMode === "manual" && <input className="task-color-input" type="color" value={task.color || colors[0]} onChange={(event) => setItems((current) => current.map((item) => item.id === task.id ? { ...item, color: event.target.value } : item))} onBlur={(event) => updatePresentation(task.id, task.status, event.target.value)} title="Color de la tarea" />}
                   </div>
-                  {visibleColumns.owner && <div className="gantt-owner"><button type="button" className="gantt-owner-summary" onClick={() => openTask(task)} title={readOnly ? taskOwners.map((owner) => owner.name).join(", ") : "Abrir para editar responsables"}><span className="mini-owner-stack">{taskOwners.slice(0, 2).map((owner) => <Avatar person={owner} size="sm" key={owner.id} />)}</span><span>{taskOwners.map((owner) => owner.name).join(", ") || "Sin asignar"}</span>{taskOwners.length > 2 && <b>+{taskOwners.length - 2}</b>}</button></div>}
+                  {visibleColumns.owner && <div className={`gantt-owner ${assigneeEditorTaskId === task.id ? "editing" : ""}`}>
+                    <button type="button" className="gantt-owner-summary" onClick={() => readOnly ? undefined : setAssigneeEditorTaskId((current) => current === task.id ? null : task.id)} title={readOnly ? taskOwners.map((owner) => owner.name).join(", ") : "Editar responsables aquí"}><span className="mini-owner-stack">{taskOwners.slice(0, 2).map((owner) => <Avatar person={owner} size="sm" key={owner.id} />)}</span><span>{taskOwners.map((owner) => owner.name).join(", ") || "Sin asignar"}</span>{taskOwners.length > 2 && <b>+{taskOwners.length - 2}</b>}</button>
+                    {!readOnly && assigneeEditorTaskId === task.id && <>
+                      <button type="button" className="gantt-assignee-dismiss" aria-label="Cerrar responsables" onClick={() => setAssigneeEditorTaskId(null)} />
+                      <div className="gantt-assignee-popover" role="dialog" aria-label={`Responsables de ${task.title}`} onClick={(event) => event.stopPropagation()}>
+                        <header><div><b>Responsables</b><span>Selecciona uno o más</span></div><button type="button" onClick={() => setAssigneeEditorTaskId(null)} aria-label="Cerrar"><X size={14} /></button></header>
+                        <div className="gantt-assignee-options">
+                          {members.map((member) => {
+                            const externalId = member.user_id.startsWith("external:") ? member.user_id.replace("external:", "") : "";
+                            const selected = externalId ? taskDirectoryIds.includes(externalId) || (!taskDirectoryIds.length && task.manualAssignee === member.full_name) : taskUserIds.includes(member.user_id);
+                            return <label className={selected ? "selected" : ""} key={member.user_id}><input type="checkbox" checked={selected} onChange={() => toggleInlineAssignee(task, member)} /><i>{initials(member.full_name || member.email)}</i><span>{member.full_name || member.email}</span><Check size={12} /></label>;
+                          })}
+                          {!members.length && <p>No hay responsables disponibles todavía.</p>}
+                        </div>
+                        <button type="button" className="gantt-assignee-manage" onClick={() => { setAssigneeEditorTaskId(null); openTask(task); }}><Plus size={13} /> Agregar otro nombre o ver detalles</button>
+                      </div>
+                    </>}
+                  </div>}
                   {visibleColumns.status && <div className="gantt-status status-tinted" style={{ "--status-cell-color": statusColor } as React.CSSProperties}>{readOnly ? <TaskBadge status={task.status} label={projectStatuses.find((item) => item.status === task.status)?.label} color={statusColor} /> : <select value={task.status} onChange={(event) => updatePresentation(task.id, event.target.value as TaskStatus, task.color || colors[0])}>{statuses.map((status) => <option value={status.value} key={status.value}>{status.label}</option>)}</select>}</div>}
                   {visibleColumns.priority && <div className="gantt-priority">{readOnly ? <span className={`priority-value priority-${priorityLabel.toLowerCase()}`}>{priorityLabel}</span> : <select className={`priority-select priority-${priorityLabel.toLowerCase()}`} value={task.priority || 2} onChange={(event) => updatePriority(task.id, Number(event.target.value) as 1 | 2 | 3)} aria-label={`Prioridad de ${task.title}`}><option value={1}>Baja</option><option value={2}>Media</option><option value={3}>Alta</option></select>}</div>}
                   {visibleColumns.progress && <div className="gantt-progress-cell" title={task.rollupProgress ? "Calculado desde subtareas" : undefined}>{readOnly || task.rollupProgress ? <div className="gantt-progress-read"><span><i style={{ width: `${task.progress}%`, background: taskDisplayColor(task, colorMode) }} /></span><b>{task.progress}%</b></div> : <label className="gantt-progress-control"><span>{task.progress}%</span><input type="range" min="0" max="100" step="5" value={task.progress} onChange={(event) => setItems((current) => current.map((item) => item.id === task.id ? { ...item, progress: Number(event.target.value) } : item))} onPointerUp={(event) => updateProgress(task.id, Number(event.currentTarget.value))} onKeyUp={(event) => updateProgress(task.id, Number(event.currentTarget.value))} onBlur={(event) => updateProgress(task.id, Number(event.currentTarget.value))} aria-label={`Avance de ${task.title}`} /></label>}</div>}
