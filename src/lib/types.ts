@@ -9,6 +9,7 @@ export type Person = {
   color: string;
   email?: string;
   permission?: "owner" | "editor" | "viewer";
+  directoryId?: string;
 };
 
 export type Project = {
@@ -44,6 +45,7 @@ export type Task = {
   parentId?: string;
   rollupProgress?: boolean;
   owner: Person;
+  owners?: Person[];
   start: number;
   duration: number;
   progress: number;
@@ -52,9 +54,12 @@ export type Task = {
   due: string;
   startDate?: string;
   dueDate?: string;
+  actualCompletionDate?: string;
   isMilestone?: boolean;
   color?: string;
   assigneeId?: string;
+  assigneeIds?: string[];
+  directoryAssigneeIds?: string[];
   manualAssignee?: string;
   overdue?: boolean;
   blockedBy?: string;

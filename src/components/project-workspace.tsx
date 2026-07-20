@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, AlertTriangle, BarChart3, CalendarCheck, Clock3, Columns3, Download, FileCode2, FileImage, FileSpreadsheet, FileText, GanttChart, LayoutList, Milestone, Pencil, RefreshCw, Settings2 } from "lucide-react";
+import { Activity, AlertTriangle, BarChart3, CalendarCheck, Clock3, Columns3, Download, FileCode2, FileImage, FileSpreadsheet, FileText, GanttChart, History, LayoutList, Milestone, Pencil, RefreshCw, Settings2 } from "lucide-react";
 import { differenceInCalendarDays, format } from "date-fns";
 import { es } from "date-fns/locale";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -10,11 +10,12 @@ import { taskDisplayColor, type TaskColorMode } from "@/lib/task-colors";
 import { applyTaskRollups, sortTasksByDate, taskDateKey, taskDepth, taskDisplaySection, taskHierarchyPath } from "@/lib/task-order";
 import { createClient, hasSupabaseConfig } from "@/lib/supabase/client";
 import { GanttBoard } from "./gantt-board";
+import { ProjectDelays } from "./project-delays";
 import { ProjectStatusSettings } from "./project-status-settings";
 import { TaskBadge } from "./status";
 import { TaskEditor, type AssignableMember } from "./task-editor";
 
-type ProjectView = "gantt" | "list" | "board" | "milestones" | "reports" | "activity";
+type ProjectView = "gantt" | "list" | "board" | "milestones" | "delays" | "reports" | "activity";
 type ActivityRow = { id: number; actor_name: string; action: string; entity_title: string; created_at: string };
 
 const actionLabels: Record<string, string> = { insert: "creó", update: "actualizó", delete: "eliminó" };
@@ -34,7 +35,7 @@ function polishedReportHtml(project: Project, tasks: Task[], statuses: ProjectTa
     return `<tr class="section"><td colspan="8"><strong>${htmlCell(section)}</strong><span>${sectionTasks.length} actividades</span></td></tr>${sectionTasks.map((task) => {
       const depth = taskDepth(task, ordered);
       const priority = task.priority === 3 ? "Alta" : task.priority === 1 ? "Baja" : "Media";
-      return `<tr class="task level-${depth}"><td><div class="tree depth-${depth}"><i></i><span><strong>${htmlCell(task.title)}</strong><small>${depth === 2 ? "Sub-subtarea" : depth === 1 ? "Subtarea" : "Tarea principal"}</small></span></div></td><td>${htmlCell(task.owner.name)}</td><td><span class="priority p-${priority.toLowerCase()}">${priority}</span></td><td><span class="state" style="--state:${statuses.find((item) => item.status === task.status)?.color || "#68766f"}">${htmlCell(statusLabel(task.status, statuses))}</span></td><td><div class="bar"><i style="width:${task.progress}%;background:${task.color || "#2f7669"}"></i></div><b>${task.progress}%</b></td><td><b>${htmlCell(task.startDate || "Sin inicio")}</b></td><td><b>${htmlCell(task.dueDate || "Sin término")}</b></td><td>${htmlCell(task.description || "—")}</td></tr>`;
+      return `<tr class="task level-${depth}"><td><div class="tree depth-${depth}"><i></i><span><strong>${htmlCell(task.title)}</strong><small>${depth === 2 ? "Sub-subtarea" : depth === 1 ? "Subtarea" : "Tarea principal"}</small></span></div></td><td>${htmlCell(task.owners?.map((owner) => owner.name).join(", ") || task.owner.name)}</td><td><span class="priority p-${priority.toLowerCase()}">${priority}</span></td><td><span class="state" style="--state:${statuses.find((item) => item.status === task.status)?.color || "#68766f"}">${htmlCell(statusLabel(task.status, statuses))}</span></td><td><div class="bar"><i style="width:${task.progress}%;background:${task.color || "#2f7669"}"></i></div><b>${task.progress}%</b></td><td><b>${htmlCell(task.startDate || "Sin inicio")}</b></td><td><b>${htmlCell(task.dueDate || "Sin término")}</b></td><td>${htmlCell(`${task.description || "—"}${task.actualCompletionDate ? ` · Fecha real: ${task.actualCompletionDate}` : ""}`)}</td></tr>`;
     }).join("")}`;
   }).join("");
   const roots = ordered.filter((task) => !task.parentId);
@@ -48,12 +49,12 @@ function excelWorkbook(project: Project, tasks: Task[], statuses: ProjectTaskSta
   const ordered = sortTasksByDate(tasks);
   const xml = (value: unknown) => htmlCell(value);
   const cell = (value: unknown, style = "Text") => `<Cell ss:StyleID="${style}"><Data ss:Type="${typeof value === "number" ? "Number" : "String"}">${xml(value)}</Data></Cell>`;
-  const header = ["Nivel", "Jerarquía", "Tarea", "Tarea padre", "Sección", "Responsable", "Prioridad", "Estado", "Avance (%)", "Inicio", "Fin", "Tipo", "Descripción"].map((value) => cell(value, "Header")).join("");
+  const header = ["Nivel", "Jerarquía", "Tarea", "Tarea padre", "Sección", "Responsables", "Prioridad", "Estado", "Avance (%)", "Inicio", "Fin", "Fecha real", "Tipo", "Descripción"].map((value) => cell(value, "Header")).join("");
   const rows = ordered.map((task) => {
     const depth = taskDepth(task, ordered); const parent = task.parentId ? ordered.find((item) => item.id === task.parentId) : undefined;
     const priority = task.priority === 3 ? "Alta" : task.priority === 1 ? "Baja" : "Media";
     const values: Array<[unknown, string?]> = [
-      [depth === 2 ? "Sub-subtarea" : depth === 1 ? "Subtarea" : "Tarea principal"], [taskHierarchyPath(task, ordered)], [task.title, `Level${depth}`], [parent?.title || ""], [taskDisplaySection(task, ordered)], [task.owner.name], [priority, `Priority${priority}`], [statusLabel(task.status, statuses)], [task.progress, "Number"], [task.startDate || "Sin inicio", "Date"], [task.dueDate || "Sin término", "Date"], [task.isMilestone ? "Hito" : "Tarea"], [task.description || ""],
+      [depth === 2 ? "Sub-subtarea" : depth === 1 ? "Subtarea" : "Tarea principal"], [taskHierarchyPath(task, ordered)], [task.title, `Level${depth}`], [parent?.title || ""], [taskDisplaySection(task, ordered)], [task.owners?.map((owner) => owner.name).join(", ") || task.owner.name], [priority, `Priority${priority}`], [statusLabel(task.status, statuses)], [task.progress, "Number"], [task.startDate || "Sin inicio", "Date"], [task.dueDate || "Sin término", "Date"], [task.actualCompletionDate || "", "Date"], [task.isMilestone ? "Hito" : "Tarea"], [task.description || ""],
     ];
     return `<Row>${values.map(([value, style]) => cell(value, style)).join("")}</Row>`;
   }).join("");
@@ -93,7 +94,7 @@ export function ProjectWorkspace({ project, initialTasks, canEdit }: { project: 
       supabase.from("project_task_statuses").select("status,label,color,enabled,sort_order").eq("project_id", project.id).order("sort_order"),
       supabase.from("project_external_assignees").select("id,name").eq("project_id", project.id).order("name"),
     ]).then(([memberResult, statusResult, externalResult]) => {
-      setMembers([...(memberResult.data || []) as AssignableMember[], ...((externalResult.data || []).map((item) => ({ user_id: `external:${item.id}`, full_name: item.name, email: "Externo" })))]);
+      setMembers([...(memberResult.data || []) as AssignableMember[], ...((externalResult.data || []).map((item) => ({ user_id: `external:${item.id}`, full_name: item.name, email: "Responsable del proyecto" })))]);
       if (statusResult.data?.length) setProjectStatuses(statusResult.data.map((row) => ({ status: row.status as TaskStatus, label: row.label, color: row.color, enabled: row.enabled, sortOrder: row.sort_order })));
     });
   }, [project.id]);
@@ -109,12 +110,12 @@ export function ProjectWorkspace({ project, initialTasks, canEdit }: { project: 
 
   useEffect(() => { if (view === "activity" && !activityRows.length) loadActivity(); }, [view, activityRows.length, loadActivity]);
 
-  const rememberLocalExternal = (name?: string) => {
+  const rememberLocalExternal = (name?: string, directoryId?: string) => {
     if (!name) return;
-    setMembers((current) => current.some((member) => member.user_id.startsWith("external:") && member.full_name.toLowerCase() === name.toLowerCase()) ? current : [...current, { user_id: `external:local-${encodeURIComponent(name.toLowerCase())}`, full_name: name, email: "Externo" }]);
+    setMembers((current) => current.some((member) => member.user_id.startsWith("external:") && member.full_name.toLowerCase() === name.toLowerCase()) ? current : [...current, { user_id: directoryId ? `external:${directoryId}` : `external:local-${encodeURIComponent(name.toLowerCase())}`, full_name: name, email: "Responsable del proyecto" }]);
   };
-  const updateLocalTask = (updated: Task) => { setTasks((current) => applyTaskRollups(current.map((task) => task.id === updated.id ? updated : task))); rememberLocalExternal(updated.manualAssignee); setSelectedTask(updated); };
-  const createLocalTask = (created: Task) => { setTasks((current) => applyTaskRollups([...current, created])); rememberLocalExternal(created.manualAssignee); };
+  const updateLocalTask = (updated: Task) => { setTasks((current) => applyTaskRollups(current.map((task) => task.id === updated.id ? updated : task))); rememberLocalExternal(updated.manualAssignee, updated.directoryAssigneeIds?.[0]); setSelectedTask(updated); };
+  const createLocalTask = (created: Task) => { setTasks((current) => applyTaskRollups([...current, created])); rememberLocalExternal(created.manualAssignee, created.directoryAssigneeIds?.[0]); };
   const deleteLocalTask = (taskId: string) => {
     setTasks((current) => {
       const removed = new Set([taskId]);
@@ -182,6 +183,7 @@ export function ProjectWorkspace({ project, initialTasks, canEdit }: { project: 
       <button className={view === "list" ? "active" : ""} onClick={() => setView("list")}><LayoutList size={14} /> Lista</button>
       <button className={view === "board" ? "active" : ""} onClick={() => setView("board")}><Columns3 size={14} /> Tablero</button>
       <button className={view === "milestones" ? "active" : ""} onClick={() => setView("milestones")}><Milestone size={14} /> Hitos <span>{milestones.length}</span></button>
+      <button className={view === "delays" ? "active" : ""} onClick={() => setView("delays")}><History size={14} /> Atrasos <span>{tasks.filter((task) => task.dueDate && ((task.actualCompletionDate && task.actualCompletionDate > task.dueDate) || (!task.actualCompletionDate && task.status !== "done" && task.dueDate < new Date().toISOString().slice(0, 10)))).length}</span></button>
       <button className={view === "reports" ? "active" : ""} onClick={() => setView("reports")}><Download size={14} /> Informes</button>
       <button className={view === "activity" ? "active" : ""} onClick={() => setView("activity")}><Activity size={14} /> Actividad</button>
     </nav>
@@ -191,6 +193,7 @@ export function ProjectWorkspace({ project, initialTasks, canEdit }: { project: 
     {view === "list" && <section className="panel project-task-list"><div className="task-list-row task-list-head"><span>Tarea</span><span>Responsable</span><span>Estado</span><span>Avance</span><span>Fecha</span><span /></div>{tasks.map((task) => <article className="task-list-row" key={task.id}><div><i style={{ background: taskDisplayColor(task, colorMode) }} /><span><b>{task.title}</b><small>{task.section}{task.description ? ` · ${task.description}` : ""}</small></span></div><span>{task.owner.name}</span><TaskBadge status={task.status} /><div className="list-progress"><span><i style={{ width: `${task.progress}%`, background: taskDisplayColor(task, colorMode) }} /></span><b>{task.progress}%</b></div><span>{task.dueDate || "Sin fecha"}</span><button className="icon-button" onClick={() => setSelectedTask(task)} title="Abrir tarea"><Pencil size={15} /></button></article>)}{!tasks.length && <div className="view-empty">No hay tareas en este proyecto.</div>}</section>}
     {view === "board" && <section className="project-board">{statusColumns.map((column) => { const columnTasks = tasks.filter((task) => task.status === column.value); return <div className="board-column" key={column.value}><header><span>{column.label}</span><b>{columnTasks.length}</b></header><div>{columnTasks.map((task) => <button className="board-task-card" key={task.id} onClick={() => setSelectedTask(task)} style={{ borderTopColor: taskDisplayColor(task, colorMode) }}><small>{task.section}</small><b>{task.title}</b><span><i style={{ width: `${task.progress}%`, background: taskDisplayColor(task, colorMode) }} /></span><footer><span>{task.owner.name}</span><strong>{task.progress}%</strong></footer></button>)}{!columnTasks.length && <span className="board-empty">Sin tareas</span>}</div></div>; })}</section>}
     {view === "milestones" && <section className="milestone-view">{milestones.map((task) => <button className="milestone-view-card" key={task.id} onClick={() => setSelectedTask(task)}><span style={{ background: taskDisplayColor(task, colorMode) }}><Milestone /></span><div><small>{task.section}</small><h3>{task.title}</h3><p>{task.description || "Sin descripción"}</p><footer><TaskBadge status={task.status} /><b><CalendarCheck size={14} /> {task.dueDate || "Sin fecha"}</b></footer></div></button>)}{!milestones.length && <div className="view-empty"><Milestone /><b>No hay hitos</b><span>Crea un hito desde la vista Gantt.</span></div>}</section>}
+    {view === "delays" && <ProjectDelays projectId={project.id} tasks={tasks} canEdit={canEdit} onOpenTask={setSelectedTask} />}
     {view === "reports" && <section className="report-grid"><button onClick={exportPdf}><span className="report-icon pdf"><FileText /></span><div><b>Informe PDF</b><small>Abre la versión imprimible para guardar como PDF.</small></div><Download /></button><button onClick={exportHtml}><span className="report-icon html"><FileCode2 /></span><div><b>Informe HTML</b><small>Documento autocontenido para compartir o archivar.</small></div><Download /></button><button onClick={exportPng}><span className="report-icon image"><FileImage /></span><div><b>Imagen PNG</b><small>Captura gráfica del cronograma y sus cápsulas.</small></div><Download /></button><button onClick={exportExcel}><span className="report-icon csv"><FileSpreadsheet /></span><div><b>Libro Excel</b><small>Jerarquía, prioridad, fechas, responsables y avance.</small></div><Download /></button></section>}
     {view === "activity" && <section className="panel project-activity"><header><div><span className="eyebrow">TRAZABILIDAD</span><h3>Actividad del proyecto</h3></div><button className="icon-button" onClick={loadActivity} disabled={activityLoading}><RefreshCw size={16} className={activityLoading ? "spin" : ""} /></button></header>{activityError && <p className="form-error">{activityError}</p>}<div>{activityRows.map((row) => <article key={row.id}><span className={`activity-dot action-${row.action}`} /> <div><b>{row.actor_name}</b> {actionLabels[row.action] || row.action} <strong>{row.entity_title}</strong><small>{format(new Date(row.created_at), "dd MMM yyyy · HH:mm", { locale: es })}</small></div></article>)}{!activityRows.length && !activityLoading && !activityError && <div className="view-empty"><Activity /><b>Sin actividad registrada</b></div>}{activityLoading && <div className="view-empty"><RefreshCw className="spin" /> Cargando actividad…</div>}</div></section>}
     {tasks.some((task) => task.status === "blocked") && view !== "board" && <div className="project-blocked-summary"><AlertTriangle size={16} /><span><b>{tasks.filter((task) => task.status === "blocked").length} tareas bloqueadas.</b> Ábrelas para revisar sus predecesoras y relaciones.</span></div>}

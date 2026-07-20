@@ -2,7 +2,7 @@
 
 import {
   AlertTriangle, CalendarRange, Check, ChevronDown, ChevronLeft, ChevronRight, CornerDownRight,
-  Columns3, Link2, Maximize2, Minimize2, Plus, Presentation, X,
+  Columns3, CopyPlus, Link2, Maximize2, Minimize2, Plus, Presentation, X,
 } from "lucide-react";
 import { addDays, differenceInCalendarDays, format, startOfWeek } from "date-fns";
 import { es } from "date-fns/locale";
@@ -17,12 +17,12 @@ import { TaskBadge } from "./status";
 
 type AssignableMember = { user_id: string; full_name: string; email: string };
 type DragState = { taskId: string; startX: number; startY: number; width: number; start: Date; due: Date; deltaDays: number; previous: Task[] };
-type ColumnKey = "task" | "owner" | "status" | "priority" | "progress" | "startDate" | "dueDate";
+type ColumnKey = "task" | "owner" | "status" | "priority" | "progress" | "startDate" | "dueDate" | "actualDate";
 type ColumnResizeState = { column: ColumnKey; startX: number; startWidth: number; min: number; max: number; scale: number };
 
 const colors = ["#2f7669", "#3778a6", "#7f5aa6", "#c07a32", "#b64e4e", "#68766f"];
-const defaultColumnWidths: Record<ColumnKey, number> = { task: 235, owner: 120, status: 90, priority: 78, progress: 70, startDate: 92, dueDate: 92 };
-const defaultVisibleColumns: Record<ColumnKey, boolean> = { task: true, owner: true, status: true, priority: true, progress: true, startDate: false, dueDate: false };
+const defaultColumnWidths: Record<ColumnKey, number> = { task: 235, owner: 130, status: 90, priority: 78, progress: 70, startDate: 104, dueDate: 104, actualDate: 104 };
+const defaultVisibleColumns: Record<ColumnKey, boolean> = { task: true, owner: true, status: true, priority: true, progress: true, startDate: true, dueDate: true, actualDate: true };
 function dateValue(date: Date) { return format(date, "yyyy-MM-dd"); }
 function initials(name: string) { return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "—"; }
 function memberPerson(member: AssignableMember): Person {
@@ -174,7 +174,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
         const names = sectionResult.data.map((row) => row.name);
         setSectionOptions(names); setTaskSection((current) => names.includes(current) ? current : names[0]);
       }
-      if (memberResult.data) setMembers([...(memberResult.data as AssignableMember[]), ...((externalResult.data || []).map((item) => ({ user_id: `external:${item.id}`, full_name: item.name, email: "Externo" })))]);
+      if (memberResult.data) setMembers([...(memberResult.data as AssignableMember[]), ...((externalResult.data || []).map((item) => ({ user_id: `external:${item.id}`, full_name: item.name, email: "Responsable del proyecto" })))]);
     };
     load();
     return () => { active = false; };
@@ -205,7 +205,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
         const due = task.dueDate ? new Date(`${task.dueDate}T12:00:00`) : addDays(start, Math.max(0, task.duration - 1));
         return { ...task, startDate: dateValue(start), dueDate: dateValue(due), color: task.color || "#2f7669" };
       });
-      const signature = (list: Task[]) => JSON.stringify(list.map((task) => [task.id, task.parentId, task.title, task.section, task.status, task.progress, task.priority, task.startDate, task.dueDate, task.color, task.assigneeId, task.manualAssignee, task.rollupProgress]));
+      const signature = (list: Task[]) => JSON.stringify(list.map((task) => [task.id, task.parentId, task.title, task.section, task.status, task.progress, task.priority, task.startDate, task.dueDate, task.actualCompletionDate, task.color, task.assigneeIds, task.directoryAssigneeIds, task.manualAssignee, task.rollupProgress]));
       if (signature(current) === signature(normalized)) return current;
       syncingFromParentRef.current = true;
       return normalized;
@@ -238,22 +238,43 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
     const startDate = createKind === "milestone" ? rawDue || dateValue(new Date()) : rawStart || dateValue(new Date());
     const dueDate = rawDue || (createKind === "milestone" ? startDate : "");
     if (hasSupabaseConfig) {
+      const supabase = createClient()!;
       const selectedChoice = members.find((member) => member.user_id === assigneeChoice);
       const externalName = assigneeChoice.startsWith("external:") ? selectedChoice?.full_name : assigneeChoice === "__manual__" ? manualAssignee.trim() : "";
-      const { data: taskId, error } = await createClient()!.rpc("create_task_with_details", {
+      const payload = {
         target_project: projectId, task_title: title, task_section: taskSection,
         task_start: startDate, task_due: dueDate || null, task_is_milestone: createKind === "milestone",
         task_color: taskColor, task_status: taskStatus,
         target_assignee: assigneeChoice && assigneeChoice !== "__manual__" && !assigneeChoice.startsWith("external:") ? assigneeChoice : null,
         assignee_label: externalName || null,
-      });
-      if (error) { setCreateError(error.code === "PGRST202" ? "Falta aplicar la migración 202607140005_interactive_gantt.sql." : error.message); setCreating(false); return; }
-      const { error: priorityError } = await createClient()!.rpc("set_task_priority", { target_task: taskId, next_priority: taskPriority });
-      if (priorityError) { setCreateError(priorityError.code === "PGRST202" ? "Falta aplicar la migración 202607150009_task_priority_external_assignees.sql." : priorityError.message); setCreating(false); return; }
-      if (assigneeChoice === "__manual__" && manualAssignee.trim()) {
-        const { data: externalId } = await createClient()!.rpc("remember_external_assignee", { target_project: projectId, assignee_name: manualAssignee.trim() });
-        if (externalId) setMembers((current) => current.some((item) => item.user_id === `external:${externalId}`) ? current : [...current, { user_id: `external:${externalId}`, full_name: manualAssignee.trim(), email: "Externo" }]);
+      };
+      let creation = await supabase.rpc("create_task_with_details", payload);
+      if (creation.error?.message.toLowerCase().includes("jwt issued at future")) {
+        const refreshed = await supabase.auth.refreshSession();
+        if (!refreshed.error) creation = await supabase.rpc("create_task_with_details", payload);
       }
+      if (creation.error || !creation.data) {
+        const problem = creation.error;
+        console.error("[Orbit] No se pudo crear la tarea", { code: problem?.code, message: problem?.message, details: problem?.details, hint: problem?.hint });
+        const message = problem?.code === "PGRST202"
+          ? "Supabase no encuentra create_task_with_details. Aplica la migración 202607140005_interactive_gantt.sql y recarga el esquema."
+          : problem?.message.toLowerCase().includes("no tienes permisos")
+            ? "Este proyecto está en modo de consulta. Solo su propietario o un colaborador editor puede crear tareas."
+            : problem?.message.toLowerCase().includes("jwt issued at future")
+              ? "La sesión está desfasada. Cierra sesión, corrige la hora automática del equipo y vuelve a ingresar."
+              : problem?.message || "Supabase no devolvió el identificador de la tarea. Revisa la consola y la petición RPC en Network.";
+        setCreateError(message); setCreating(false); return;
+      }
+      const taskId = String(creation.data);
+      let directoryId: string | null = null;
+      if (assigneeChoice === "__manual__" && manualAssignee.trim()) {
+        const { data: externalId } = await supabase.rpc("remember_external_assignee", { target_project: projectId, assignee_name: manualAssignee.trim() });
+        if (externalId) { directoryId = String(externalId); setMembers((current) => current.some((item) => item.user_id === `external:${externalId}`) ? current : [...current, { user_id: `external:${externalId}`, full_name: manualAssignee.trim(), email: "Responsable del proyecto" }]); }
+      }
+      if (assigneeChoice.startsWith("external:")) directoryId = assigneeChoice.replace("external:", "");
+      const registeredId = assigneeChoice && assigneeChoice !== "__manual__" && !assigneeChoice.startsWith("external:") ? assigneeChoice : null;
+      const assignment = await supabase.rpc("set_task_assignees", { target_task: taskId, target_users: registeredId ? [registeredId] : [], target_directory_assignees: directoryId ? [directoryId] : [] });
+      if (assignment.error && assignment.error.code !== "PGRST202") setInteractionError(`La tarea fue creada, pero no se guardó el responsable: ${assignment.error.message}`);
       const selectedMember = members.find((member) => member.user_id === assigneeChoice && !member.user_id.startsWith("external:"));
       const owner = selectedMember ? memberPerson(selectedMember) : externalName
         ? { ...unassigned, id: `manual-${taskId}`, name: externalName, initials: initials(externalName) }
@@ -261,21 +282,28 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
       const start = new Date(`${startDate}T12:00:00`);
       const due = dueDate ? new Date(`${dueDate}T12:00:00`) : start;
       setItems((current) => [...current, {
-        id: String(taskId), projectId, title, section: taskSection, owner,
+        id: taskId, projectId, title, section: taskSection, owner,
         start: differenceInCalendarDays(start, projectBase) + 1,
         duration: createKind === "milestone" ? 1 : Math.max(1, differenceInCalendarDays(due, start) + 1),
         progress: taskStatus === "done" ? 100 : 0, status: taskStatus, priority: taskPriority,
         due: dueDate ? format(due, "dd MMM", { locale: es }) : "Sin fecha",
         startDate, dueDate, isMilestone: createKind === "milestone", color: taskColor,
-        assigneeId: selectedMember?.user_id, manualAssignee: externalName || undefined,
+        assigneeId: selectedMember?.user_id, assigneeIds: selectedMember ? [selectedMember.user_id] : [], directoryAssigneeIds: directoryId ? [directoryId] : [], manualAssignee: externalName || undefined, owners: owner.id === "unassigned" ? [] : [owner],
       }]);
+      const { error: priorityError } = await supabase.rpc("set_task_priority", { target_task: taskId, next_priority: taskPriority });
+      if (priorityError) {
+        console.error("[Orbit] La tarea fue creada, pero no se guardó su prioridad", { code: priorityError.code, message: priorityError.message });
+        setInteractionError(priorityError.code === "PGRST202"
+          ? "La tarea fue creada con prioridad media. Falta aplicar 202607150009_task_priority_external_assignees.sql."
+          : `La tarea fue creada, pero Supabase no guardó la prioridad: ${priorityError.message}`);
+      }
     }
     setCreating(false); setCreateOpen(false);
   };
 
   const updatePresentation = async (taskId: string, nextStatus: TaskStatus, nextColor: string) => {
     const previous = items;
-    setItems((current) => current.map((task) => task.id === taskId ? { ...task, status: nextStatus, color: nextColor, progress: nextStatus === "done" ? 100 : task.status === "done" ? 0 : task.progress } : task));
+    setItems((current) => current.map((task) => task.id === taskId ? { ...task, status: nextStatus, color: nextColor, progress: nextStatus === "done" ? 100 : task.status === "done" ? 0 : task.progress, actualCompletionDate: nextStatus !== "done" && task.status === "done" ? "" : task.actualCompletionDate } : task));
     if (!hasSupabaseConfig || !/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(taskId)) return;
     const supabase = createClient()!;
     let result = await supabase.rpc("update_task_presentation", { target_task: taskId, next_status: nextStatus, next_color: nextColor });
@@ -289,20 +317,10 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
     }
   };
 
-  const updateOwner = async (task: Task, memberId: string) => {
-    const previous = items;
-    const member = members.find((item) => item.user_id === memberId);
-    const externalName = memberId.startsWith("external:") ? member?.full_name : undefined;
-    setItems((current) => current.map((item) => item.id === task.id ? { ...item, owner: externalName ? { ...unassigned, id: memberId, name: externalName, initials: initials(externalName) } : member ? memberPerson(member) : unassigned, assigneeId: externalName ? undefined : member?.user_id, manualAssignee: externalName } : item));
-    if (!hasSupabaseConfig) return;
-    const { error } = await createClient()!.rpc("set_task_owner", { target_task: task.id, target_assignee: memberId && !memberId.startsWith("external:") ? memberId : null, assignee_label: externalName || null });
-    if (error) { setItems(previous); setInteractionError(error.message); }
-  };
-
   const updateProgress = async (taskId: string, nextProgress: number) => {
     const progress = Math.min(100, Math.max(0, nextProgress));
     const previous = items;
-    setItems((current) => current.map((task) => task.id === taskId ? { ...task, progress, status: progress === 100 ? "done" : task.status === "done" ? "progress" : task.status } : task));
+    setItems((current) => current.map((task) => task.id === taskId ? { ...task, progress, status: progress === 100 ? "done" : task.status === "done" ? "progress" : task.status, actualCompletionDate: progress < 100 && task.status === "done" ? "" : task.actualCompletionDate } : task));
     if (!hasSupabaseConfig) return;
     const { error } = await createClient()!.rpc("update_task_progress", { target_task: taskId, next_progress: progress });
     if (error) { setItems(previous); setInteractionError(error.code === "PGRST202" ? "Falta aplicar la migración 202607140006_task_management.sql." : error.message); }
@@ -317,6 +335,41 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
       setItems(previous);
       setInteractionError(error.code === "PGRST202" ? "Falta aplicar la migración 202607150009_task_priority_external_assignees.sql." : error.message);
     }
+  };
+
+  const updateInlineDate = async (task: Task, field: "startDate" | "dueDate" | "actualCompletionDate", value: string) => {
+    const previous = items;
+    const next = { ...task, [field]: value };
+    if (field === "startDate" && value && next.dueDate && next.dueDate < value) {
+      setInteractionError("La fecha de inicio no puede ser posterior al término."); return;
+    }
+    if (field === "dueDate" && value && next.startDate && value < next.startDate) {
+      setInteractionError("La fecha de término no puede ser anterior al inicio."); return;
+    }
+    setItems((current) => current.map((item) => item.id === task.id ? {
+      ...item,
+      [field]: value,
+      due: field === "dueDate" && value ? format(new Date(`${value}T12:00:00`), "dd MMM", { locale: es }) : item.due,
+    } : item));
+    if (!hasSupabaseConfig) return;
+    const { error } = await createClient()!.rpc("update_task_dates", {
+      target_task: task.id,
+      task_start: field === "startDate" ? value || null : task.startDate || null,
+      task_due: field === "dueDate" ? value || null : task.dueDate || null,
+      task_actual: field === "actualCompletionDate" ? value || null : task.actualCompletionDate || null,
+    });
+    if (error) { setItems(previous); setInteractionError(error.code === "PGRST202" ? "Falta aplicar la migración 202607200016_task_delays_actual_dates.sql." : error.message); }
+  };
+
+  const duplicateTask = async (task: Task) => {
+    if (readOnly) return;
+    let newId = `copy-${Date.now()}`;
+    if (hasSupabaseConfig) {
+      const { data, error } = await createClient()!.rpc("duplicate_task", { target_task: task.id });
+      if (error) { setInteractionError(error.code === "PGRST202" ? "Falta aplicar la migración 202607200016_task_delays_actual_dates.sql." : error.message); return; }
+      newId = String(data);
+    }
+    setItems((current) => [...current, { ...task, id: newId, title: `Copia de ${task.title}`, status: "todo", progress: 0, actualCompletionDate: "", rollupProgress: false }]);
   };
 
   const branchIds = (rootId: string) => {
@@ -426,16 +479,18 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   };
   const taskOffset = (task: Task) => task.startDate ? differenceInCalendarDays(new Date(`${task.startDate}T12:00:00`), windowStart) : task.start - 1;
   const taskWidth = (task: Task) => task.isMilestone ? 1 : task.startDate && task.dueDate ? Math.max(1, differenceInCalendarDays(new Date(`${task.dueDate}T12:00:00`), new Date(`${task.startDate}T12:00:00`)) + 1) : task.duration;
+  const actualDelayOffset = (task: Task) => task.dueDate ? differenceInCalendarDays(new Date(`${task.dueDate}T12:00:00`), windowStart) + 1 : 0;
+  const actualDelayWidth = (task: Task) => task.dueDate && task.actualCompletionDate ? Math.max(0, differenceInCalendarDays(new Date(`${task.actualCompletionDate}T12:00:00`), new Date(`${task.dueDate}T12:00:00`))) : 0;
   const hierarchyLabel = (task: Task) => taskDepth(task, items) === 2 ? "Sub-subtarea" : taskDepth(task, items) === 1 ? "Subtarea" : "";
   const dayLabelEvery = rangeDays <= 30 ? 1 : rangeDays <= 60 ? 2 : rangeDays <= 90 ? 3 : 7;
-  const visibleColumnOrder: ColumnKey[] = ["task", "owner", "status", "priority", "progress", "startDate", "dueDate"];
+  const visibleColumnOrder: ColumnKey[] = ["task", "owner", "status", "priority", "progress", "startDate", "dueDate", "actualDate"];
   const gridTemplateColumns = `${visibleColumnOrder.filter((column) => visibleColumns[column]).map((column) => `${columnWidths[column]}px`).join(" ")} minmax(565px, 1fr)`;
   const informationWidth = visibleColumnOrder.filter((column) => visibleColumns[column]).reduce((sum, column) => sum + columnWidths[column], 0);
   const gridStyle = { gridTemplateColumns } as React.CSSProperties;
   const prettyDate = (value?: string) => value ? format(new Date(`${value}T12:00:00`), "dd MMM yy", { locale: es }) : "Sin fecha";
   const columnOptions: { key: ColumnKey; label: string }[] = [
     { key: "owner", label: "Responsable" }, { key: "status", label: "Estado" }, { key: "priority", label: "Prioridad" },
-    { key: "progress", label: "Avance" }, { key: "startDate", label: "Fecha de inicio" }, { key: "dueDate", label: "Fecha de fin" },
+    { key: "progress", label: "Avance" }, { key: "startDate", label: "Fecha de inicio" }, { key: "dueDate", label: "Fecha de fin" }, { key: "actualDate", label: "Fecha real" },
   ];
 
   return (
@@ -479,7 +534,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
         </div>
       </div>}
       {!simpleView && <div className="gantt-desktop" style={{ "--day-size": `${100 / rangeDays}%`, "--segment-count": timelineSegments.length, minWidth: `${informationWidth + 565}px` } as React.CSSProperties} onWheel={navigateWheel}>
-        <div className="gantt-grid gantt-header-row" style={gridStyle}><div className="gantt-task-head">TAREA{columnResizer("task", 180, 430)}</div>{visibleColumns.owner && <div className="gantt-owner-head">RESPONSABLE{columnResizer("owner", 90, 240)}</div>}{visibleColumns.status && <div className="gantt-status-head">ESTADO{columnResizer("status", 75, 180)}</div>}{visibleColumns.priority && <div className="gantt-priority-head">PRIORIDAD{columnResizer("priority", 65, 140)}</div>}{visibleColumns.progress && <div className="gantt-progress-head">AVANCE{columnResizer("progress", 65, 150)}</div>}{visibleColumns.startDate && <div className="gantt-date-head">INICIO{columnResizer("startDate", 78, 150)}</div>}{visibleColumns.dueDate && <div className="gantt-date-head">FIN{columnResizer("dueDate", 78, 150)}</div>}<div className="gantt-timeline-head"><div className="gantt-weeks" style={{ gridTemplateColumns: `repeat(${timelineSegments.length}, 1fr)` }}>{timelineSegments.map((segment, index) => <span key={`${segment}-${index}`}>{segment}</span>)}</div><div className="gantt-days" style={{ gridTemplateColumns: `repeat(${rangeDays}, 1fr)` }}>{timelineDays.map((day, index) => <span className={dateValue(day) === todayKey ? "today" : ""} key={day.toISOString()}>{index % dayLabelEvery === 0 ? format(day, "d") : ""}</span>)}</div></div></div>
+        <div className="gantt-grid gantt-header-row" style={gridStyle}><div className="gantt-task-head">TAREA{columnResizer("task", 180, 430)}</div>{visibleColumns.owner && <div className="gantt-owner-head">RESPONSABLES{columnResizer("owner", 90, 260)}</div>}{visibleColumns.status && <div className="gantt-status-head">ESTADO{columnResizer("status", 75, 180)}</div>}{visibleColumns.priority && <div className="gantt-priority-head">PRIORIDAD{columnResizer("priority", 65, 140)}</div>}{visibleColumns.progress && <div className="gantt-progress-head">AVANCE{columnResizer("progress", 65, 150)}</div>}{visibleColumns.startDate && <div className="gantt-date-head">INICIO{columnResizer("startDate", 88, 170)}</div>}{visibleColumns.dueDate && <div className="gantt-date-head">FIN{columnResizer("dueDate", 88, 170)}</div>}{visibleColumns.actualDate && <div className="gantt-date-head actual">REAL{columnResizer("actualDate", 88, 170)}</div>}<div className="gantt-timeline-head"><div className="gantt-weeks" style={{ gridTemplateColumns: `repeat(${timelineSegments.length}, 1fr)` }}>{timelineSegments.map((segment, index) => <span key={`${segment}-${index}`}>{segment}</span>)}</div><div className="gantt-days" style={{ gridTemplateColumns: `repeat(${rangeDays}, 1fr)` }}>{timelineDays.map((day, index) => <span className={dateValue(day) === todayKey ? "today" : ""} key={day.toISOString()}>{index % dayLabelEvery === 0 ? format(day, "d") : ""}</span>)}</div></div></div>
         <div className="gantt-body">
           {todayOffset >= 0 && todayOffset < rangeDays && <div className="today-line" style={{ left: `calc(${informationWidth}px + (100% - ${informationWidth}px) * ${todayOffset / rangeDays})` }} />}
           {sections.map((section) => (
@@ -492,21 +547,24 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
                 const taskHasChildren = hasChildren(task);
                 const depth = taskDepth(task, items);
                 const priorityLabel = task.priority === 3 ? "Alta" : task.priority === 1 ? "Baja" : "Media";
-                const rememberedExternal = task.manualAssignee ? members.find((member) => member.user_id.startsWith("external:") && member.full_name.toLowerCase() === task.manualAssignee?.toLowerCase()) : undefined;
+                const statusColor = projectStatuses.find((item) => item.status === task.status)?.color || "#68766f";
+                const taskOwners = task.owners?.length ? task.owners : [task.owner];
                 return <div data-task-drop={task.id} className={`gantt-grid gantt-task-row ${hierarchyTarget === task.id ? "hierarchy-drop-target" : ""} ${hierarchyDrag === task.id ? "hierarchy-dragging" : ""}`} key={task.id} style={gridStyle} onDragOver={(event) => { if (!hierarchyDrag || hierarchyDrag === task.id) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setHierarchyTarget(task.id); }} onDragLeave={() => setHierarchyTarget((current) => current === task.id ? null : current)} onDrop={(event) => dropOnTask(event, task.id)}>
                   <div className={`gantt-task-name task-depth-${depth}`} draggable={!readOnly} onDragStart={(event) => startHierarchyDrag(event, task.id)} onDragEnd={() => { setHierarchyDrag(null); setHierarchyTarget(null); }} title={readOnly ? undefined : "Arrastra para convertirla en subtarea o moverla a una sección"}>
                     <button className={`tiny-check ${task.status === "done" ? "checked" : ""}`} disabled={readOnly} onClick={() => updatePresentation(task.id, task.status === "done" ? "todo" : "done", task.color || colors[0])} title={readOnly ? "Estado visible en modo de consulta" : "Marcar como completada"}>{task.status === "done" && <Check size={12} />}</button>
                     <span className="task-tree-control">{taskHasChildren ? <button type="button" className={`hierarchy-toggle ${depth > 0 ? "hierarchy-branch" : "hierarchy-root"} ${collapsedParents.includes(task.id) ? "collapsed" : ""}`} onClick={() => setCollapsedParents((current) => current.includes(task.id) ? current.filter((id) => id !== task.id) : [...current, task.id])} title={collapsedParents.includes(task.id) ? "Mostrar subtareas" : "Ocultar subtareas"} aria-label={collapsedParents.includes(task.id) ? "Mostrar subtareas" : "Ocultar subtareas"}>{depth > 0 ? <CornerDownRight size={13} /> : <span className="root-chevron" />}</button> : depth > 0 ? <CornerDownRight className="subtask-arrow" size={13} /> : <span className="hierarchy-spacer" />}</span>
                     <span><span className="task-title-line"><button type="button" className="task-open-button" onClick={() => openTask(task)}>{task.title}</button></span>{(hierarchyLabel(task) || task.isMilestone) && <small>{hierarchyLabel(task) && <em>{hierarchyLabel(task)}</em>}{task.isMilestone && "Hito"}</small>}</span>
+                    {!readOnly && <button type="button" className="task-duplicate-button" onClick={() => duplicateTask(task)} title="Duplicar tarea"><CopyPlus size={13} /></button>}
                     {!readOnly && colorMode === "manual" && <input className="task-color-input" type="color" value={task.color || colors[0]} onChange={(event) => setItems((current) => current.map((item) => item.id === task.id ? { ...item, color: event.target.value } : item))} onBlur={(event) => updatePresentation(task.id, task.status, event.target.value)} title="Color de la tarea" />}
                   </div>
-                  {visibleColumns.owner && <div className="gantt-owner">{readOnly ? <><Avatar person={task.owner} size="sm" /><span>{task.owner.name}</span></> : <select value={task.manualAssignee ? rememberedExternal?.user_id || "external:manual_current" : task.assigneeId || ""} onChange={(event) => updateOwner(task, event.target.value)}><option value="">Sin asignar</option>{task.manualAssignee && !rememberedExternal && <option value="external:manual_current" disabled>{task.manualAssignee}</option>}{members.map((member) => <option value={member.user_id} key={member.user_id}>{member.full_name}{member.user_id.startsWith("external:") ? " · Externo" : ""}</option>)}</select>}</div>}
-                  {visibleColumns.status && <div className="gantt-status">{readOnly ? <TaskBadge status={task.status} label={projectStatuses.find((item) => item.status === task.status)?.label} color={projectStatuses.find((item) => item.status === task.status)?.color} /> : <select value={task.status} onChange={(event) => updatePresentation(task.id, event.target.value as TaskStatus, task.color || colors[0])}>{statuses.map((status) => <option value={status.value} key={status.value}>{status.label}</option>)}</select>}</div>}
+                  {visibleColumns.owner && <div className="gantt-owner"><button type="button" className="gantt-owner-summary" onClick={() => openTask(task)} title={readOnly ? taskOwners.map((owner) => owner.name).join(", ") : "Abrir para editar responsables"}><span className="mini-owner-stack">{taskOwners.slice(0, 2).map((owner) => <Avatar person={owner} size="sm" key={owner.id} />)}</span><span>{taskOwners.map((owner) => owner.name).join(", ") || "Sin asignar"}</span>{taskOwners.length > 2 && <b>+{taskOwners.length - 2}</b>}</button></div>}
+                  {visibleColumns.status && <div className="gantt-status status-tinted" style={{ "--status-cell-color": statusColor } as React.CSSProperties}>{readOnly ? <TaskBadge status={task.status} label={projectStatuses.find((item) => item.status === task.status)?.label} color={statusColor} /> : <select value={task.status} onChange={(event) => updatePresentation(task.id, event.target.value as TaskStatus, task.color || colors[0])}>{statuses.map((status) => <option value={status.value} key={status.value}>{status.label}</option>)}</select>}</div>}
                   {visibleColumns.priority && <div className="gantt-priority">{readOnly ? <span className={`priority-value priority-${priorityLabel.toLowerCase()}`}>{priorityLabel}</span> : <select className={`priority-select priority-${priorityLabel.toLowerCase()}`} value={task.priority || 2} onChange={(event) => updatePriority(task.id, Number(event.target.value) as 1 | 2 | 3)} aria-label={`Prioridad de ${task.title}`}><option value={1}>Baja</option><option value={2}>Media</option><option value={3}>Alta</option></select>}</div>}
                   {visibleColumns.progress && <div className="gantt-progress-cell" title={task.rollupProgress ? "Calculado desde subtareas" : undefined}>{readOnly || task.rollupProgress ? <div className="gantt-progress-read"><span><i style={{ width: `${task.progress}%`, background: taskDisplayColor(task, colorMode) }} /></span><b>{task.progress}%</b></div> : <label className="gantt-progress-control"><span>{task.progress}%</span><input type="range" min="0" max="100" step="5" value={task.progress} onChange={(event) => setItems((current) => current.map((item) => item.id === task.id ? { ...item, progress: Number(event.target.value) } : item))} onPointerUp={(event) => updateProgress(task.id, Number(event.currentTarget.value))} onKeyUp={(event) => updateProgress(task.id, Number(event.currentTarget.value))} onBlur={(event) => updateProgress(task.id, Number(event.currentTarget.value))} aria-label={`Avance de ${task.title}`} /></label>}</div>}
-                  {visibleColumns.startDate && <div className="gantt-date-cell">{prettyDate(task.startDate)}</div>}
-                  {visibleColumns.dueDate && <div className={`gantt-date-cell ${task.overdue ? "overdue" : ""}`}>{prettyDate(task.dueDate)}</div>}
-                  <div className="gantt-timeline"><div className={`gantt-bar bar-${task.status} ${task.isMilestone ? "gantt-milestone" : ""} ${dragRef.current?.taskId === task.id ? "dragging" : ""}`} style={{ left: `${taskOffset(task) / rangeDays * 100}%`, width: task.isMilestone ? "18px" : `${taskWidth(task) / rangeDays * 100}%`, "--task-color": taskDisplayColor(task, colorMode) } as React.CSSProperties} title={`${task.title} · clic para abrir · arrastra para cambiar fechas`} onPointerDown={(event) => startDrag(event, task)} onPointerMove={moveDrag} onPointerUp={endDrag}><i style={{ width: `${task.progress}%` }} /><span>{task.isMilestone ? "" : task.progress > 0 ? `${task.progress}%` : ""}</span>{task.status === "blocked" && <AlertTriangle size={13} />}</div></div>
+                  {visibleColumns.startDate && <div className="gantt-date-cell">{readOnly ? prettyDate(task.startDate) : <input type="date" value={task.startDate || ""} onChange={(event) => updateInlineDate(task, "startDate", event.target.value)} aria-label={`Inicio de ${task.title}`} />}</div>}
+                  {visibleColumns.dueDate && <div className={`gantt-date-cell ${task.overdue ? "overdue" : ""}`}>{readOnly ? prettyDate(task.dueDate) : <input type="date" value={task.dueDate || ""} onChange={(event) => updateInlineDate(task, "dueDate", event.target.value)} aria-label={`Fin de ${task.title}`} />}</div>}
+                  {visibleColumns.actualDate && <div className={`gantt-date-cell actual ${task.actualCompletionDate && task.dueDate && task.actualCompletionDate > task.dueDate ? "late" : ""}`}>{readOnly ? prettyDate(task.actualCompletionDate) : <input type="date" value={task.actualCompletionDate || ""} onChange={(event) => updateInlineDate(task, "actualCompletionDate", event.target.value)} aria-label={`Fecha real de ${task.title}`} />}</div>}
+                  <div className="gantt-timeline">{actualDelayWidth(task) > 0 && <span className="gantt-actual-delay" style={{ left: `${actualDelayOffset(task) / rangeDays * 100}%`, width: `${actualDelayWidth(task) / rangeDays * 100}%` }} title={`${actualDelayWidth(task)} días de atraso real`} />}<div className={`gantt-bar bar-${task.status} ${task.isMilestone ? "gantt-milestone" : ""} ${dragRef.current?.taskId === task.id ? "dragging" : ""}`} style={{ left: `${taskOffset(task) / rangeDays * 100}%`, width: task.isMilestone ? "18px" : `${taskWidth(task) / rangeDays * 100}%`, "--task-color": taskDisplayColor(task, colorMode) } as React.CSSProperties} title={`${task.title} · clic para abrir · arrastra para cambiar fechas`} onPointerDown={(event) => startDrag(event, task)} onPointerMove={moveDrag} onPointerUp={endDrag}><i style={{ width: `${task.progress}%` }} /><span>{task.isMilestone ? "" : task.progress > 0 ? `${task.progress}%` : ""}</span>{task.status === "blocked" && <AlertTriangle size={13} />}</div></div>
                 </div>;
               })}
             </div>

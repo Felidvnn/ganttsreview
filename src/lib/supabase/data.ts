@@ -17,9 +17,10 @@ type DbProject = {
   creator?: DbProfile | DbProfile[] | null; project_members?: DbMember[]; tasks?: DbTaskCount[];
 };
 type DbAssignee = { user_id?: string; profiles?: DbProfile | DbProfile[] | null };
+type DbDirectoryAssignee = { assignee_id?: string; project_external_assignees?: { id: string; name: string } | { id: string; name: string }[] | null };
 type DbTask = {
   id: string; project_id: string; parent_id?: string | null; title: string; description?: string; section: string; status: string; start_date: string | null;
-  due_date: string | null; progress: number; task_assignees?: DbAssignee[];
+  due_date: string | null; actual_completion_date?: string | null; progress: number; task_assignees?: DbAssignee[]; task_directory_assignees?: DbDirectoryAssignee[];
   is_milestone?: boolean; color?: string; manual_assignee?: string | null; rollup_progress?: boolean; priority?: number;
 };
 
@@ -84,7 +85,7 @@ export async function getProjectBundle(id: string): Promise<{ project: Project; 
   const supabase = await createServerSupabaseClient();
   const [projectResult, taskResult, sessionResult] = await Promise.all([
     supabase!.from("projects").select("*, creator:profiles!projects_created_by_fkey(id,full_name,job_title), project_members(user_id,permission,profiles!project_members_user_id_fkey(id,full_name,job_title)), tasks(id,status,progress,due_date,is_milestone)").eq("id", id).single(),
-    supabase!.from("tasks").select("*, task_assignees(user_id,profiles!task_assignees_user_id_fkey(id, full_name, job_title))").eq("project_id", id).order("sort_order"),
+    supabase!.from("tasks").select("*, task_assignees(user_id,profiles!task_assignees_user_id_fkey(id, full_name, job_title)), task_directory_assignees(assignee_id,project_external_assignees!task_directory_assignees_assignee_id_fkey(id,name))").eq("project_id", id).order("sort_order"),
     supabase!.auth.getUser(),
   ]);
   const { data: projectData, error: projectError } = projectResult;
@@ -100,20 +101,27 @@ export async function getProjectBundle(id: string): Promise<{ project: Project; 
   const mappedTasks = ((taskData ?? []) as unknown as DbTask[]).map((row, index): Task => {
     const startDate = row.start_date ? new Date(`${row.start_date}T12:00:00`) : projectStart;
     const dueDate = row.due_date ? new Date(`${row.due_date}T12:00:00`) : startDate;
-    const assignedProfile = oneProfile(row.task_assignees?.[0]?.profiles);
+    const registeredOwners = (row.task_assignees ?? []).map((assignment, ownerIndex) => toPerson(oneProfile(assignment.profiles), index + ownerIndex)).filter((person) => !person.id.startsWith("unassigned-"));
+    const directoryOwners: Person[] = (row.task_directory_assignees ?? []).flatMap((assignment) => {
+      const entry = Array.isArray(assignment.project_external_assignees) ? assignment.project_external_assignees[0] : assignment.project_external_assignees;
+      if (!entry) return [];
+      return [{ id: `directory:${entry.id}`, directoryId: entry.id, name: entry.name, initials: entry.name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "?", role: "Ingeniero" as const, color: "#7c8c86" }];
+    });
     const manualName = row.manual_assignee?.trim();
-    const owner = assignedProfile ? toPerson(assignedProfile, index) : manualName
+    const legacyManual = manualName && !directoryOwners.some((person) => person.name.toLowerCase() === manualName.toLowerCase())
       ? { id: `manual-${row.id}`, name: manualName, initials: manualName.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase(), role: "Ingeniero" as const, color: "#7c8c86" }
-      : toPerson(null, index);
+      : null;
+    const owners = [...registeredOwners, ...directoryOwners, ...(legacyManual ? [legacyManual] : [])];
+    const owner = owners[0] ?? toPerson(null, index);
     return {
       id: row.id, projectId: row.project_id, parentId: row.parent_id ?? undefined, rollupProgress: Boolean(row.rollup_progress), title: row.title, description: row.description ?? "", section: row.section || "General",
       owner,
       start: Math.max(1, differenceInCalendarDays(startDate, projectStart) + 1),
       duration: Math.max(1, differenceInCalendarDays(dueDate, startDate) + 1), progress: row.progress ?? 0, priority: Math.min(3, Math.max(1, row.priority ?? 2)) as 1 | 2 | 3,
       status: row.status as TaskStatus, due: row.due_date ? format(dueDate, "dd MMM", { locale: es }) : "Sin fecha",
-      dueDate: row.due_date ?? "", isMilestone: Boolean(row.is_milestone),
+      dueDate: row.due_date ?? "", actualCompletionDate: row.actual_completion_date ?? "", isMilestone: Boolean(row.is_milestone),
       startDate: row.start_date ?? "", color: row.color ?? "#2f7669",
-      assigneeId: row.task_assignees?.[0]?.user_id, manualAssignee: row.manual_assignee ?? undefined,
+      owners, assigneeId: row.task_assignees?.[0]?.user_id, assigneeIds: row.task_assignees?.map((assignment) => assignment.user_id).filter((id): id is string => Boolean(id)), directoryAssigneeIds: row.task_directory_assignees?.map((assignment) => assignment.assignee_id).filter((id): id is string => Boolean(id)), manualAssignee: row.manual_assignee ?? undefined,
       overdue: Boolean(row.due_date && dueDate < new Date() && row.status !== "done"),
     };
   });
