@@ -96,6 +96,11 @@ export async function getProjectBundle(id: string): Promise<{ project: Project; 
   if (projectError || !projectData) return null;
   const { data: taskData, error: taskError } = taskResult;
   if (taskError) throw new Error(`No se pudieron cargar las tareas: ${taskError.message}`);
+  const taskIds = (taskData ?? []).map((task) => task.id);
+  const noteResult = taskIds.length
+    ? await supabase!.from("task_private_notes").select("task_id").in("task_id", taskIds)
+    : { data: [], error: null };
+  const tasksWithPrivateNotes = new Set((noteResult.data ?? []).map((note) => note.task_id));
   const project = mapProject(projectData as unknown as DbProject);
   const user = sessionResult.data.user;
   const rawProject = projectData as unknown as DbProject;
@@ -129,6 +134,7 @@ export async function getProjectBundle(id: string): Promise<{ project: Project; 
       owners, assigneeId: row.task_assignees?.[0]?.user_id, assigneeIds: row.task_assignees?.map((assignment) => assignment.user_id).filter((id): id is string => Boolean(id)), directoryAssigneeIds: row.task_directory_assignees?.map((assignment) => assignment.assignee_id).filter((id): id is string => Boolean(id)), manualAssignee: row.manual_assignee ?? undefined,
       taskTypeId: row.task_type_id ?? undefined, taskTypeName: taskType?.name, taskTypeColor: taskType?.color,
       sortOrder: row.sort_order,
+      hasPrivateNote: tasksWithPrivateNotes.has(row.id),
       overdue: Boolean(row.due_date && dueDate < new Date() && row.status !== "done"),
     };
   });

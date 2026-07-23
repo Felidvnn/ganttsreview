@@ -66,6 +66,7 @@ export type Task = {
   taskTypeName?: string;
   taskTypeColor?: string;
   sortOrder?: number;
+  hasPrivateNote?: boolean;
   overdue?: boolean;
   blockedBy?: string;
   section: string;

@@ -137,13 +137,14 @@ export function QuickCreate({ open, onClose }: { open: boolean; onClose: () => v
       sheet.addRow(importHeaders);
       sheet.addRows([
         ["1", "", "Planificación", "Preparar proyecto", "Proceso", "2026-07-20", "2026-07-24", "", "No", "En curso", "Media", 25, "Equipo D2", "Actividad principal"],
-        ["1.1", "1", "Planificación", "Reunión de inicio", "Reunión", "2026-07-21", "2026-07-21", "", "No", "Pendiente", "Alta", 0, "María Pérez", "Subtarea; el padre debe aparecer antes"],
-        ["1.1.1", "1.1", "Planificación", "Enviar minuta", "Entregable", "2026-07-22", "2026-07-22", "", "Sí", "Pendiente", "Media", 0, "María Pérez", "Sub-subtarea, último nivel permitido"],
+        ["1.1", "1", "Planificación", "Reunión de inicio", "Reunión", "2026-07-21", "2026-07-21", "", "No", "Pendiente", "Alta", 0, "María Pérez", "Primer nivel anidado; el padre debe aparecer antes"],
+        ["1.1.1", "1.1", "Planificación", "Preparar minuta", "Entregable", "2026-07-22", "2026-07-22", "", "No", "Pendiente", "Media", 0, "María Pérez", "Segundo nivel anidado"],
+        ["1.1.1.1", "1.1.1", "Planificación", "Enviar minuta", "Tarea", "2026-07-22", "2026-07-22", "", "Sí", "Pendiente", "Media", 0, "María Pérez", "Tercer y último nivel anidado"],
       ]);
       sheet.columns = [10, 12, 18, 34, 18, 14, 14, 14, 10, 16, 12, 12, 22, 42].map((width) => ({ width }));
       sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } }; sheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2F7669" } }; sheet.autoFilter = { from: "A1", to: "N1" };
       const help = workbook.addWorksheet("Instrucciones");
-      help.addRows([["Cómo importar"], ["Una fila equivale a una tarea. ID debe ser único."], ["Para crear subtareas, escribe en ID padre el ID de una fila anterior. Se admiten dos niveles."], ["Las fechas pueden quedar provisoriamente invertidas; Orbit las marcará para revisión."], ["Estado: Pendiente, En curso, Revisión, Bloqueada o Completada."], ["Prioridad: Baja, Media o Alta. Avance: número entre 0 y 100."], ["Tipo y responsable se guardarán en el proyecto si todavía no existen."]]);
+      help.addRows([["Cómo importar"], ["Una fila equivale a una tarea. ID debe ser único."], ["Para anidar tareas, escribe en ID padre el ID de una fila anterior. Se admiten tres niveles bajo la tarea principal."], ["Las fechas pueden quedar provisoriamente invertidas; Orbit las marcará para revisión."], ["Estado: Pendiente, En curso, Revisión, Bloqueada o Completada."], ["Prioridad: Baja, Media o Alta. Avance: número entre 0 y 100."], ["Tipo y responsable se guardarán en el proyecto si todavía no existen."]]);
       help.getColumn(1).width = 105; help.getRow(1).font = { bold: true, size: 15, color: { argb: "FF2F7669" } };
       const buffer = await workbook.xlsx.writeBuffer();
       const url = URL.createObjectURL(new Blob([buffer as BlobPart], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));

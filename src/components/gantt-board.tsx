@@ -2,7 +2,7 @@
 
 import {
   AlertTriangle, CalendarRange, Check, ChevronDown, ChevronLeft, ChevronRight, CornerDownRight,
-  Columns3, CopyPlus, Link2, Maximize2, Minimize2, Plus, Presentation, Trash2, X,
+  Columns3, CopyPlus, Link2, Maximize2, Minimize2, Plus, Presentation, StickyNote, Trash2, X,
 } from "lucide-react";
 import { addDays, differenceInCalendarDays, format, startOfWeek } from "date-fns";
 import { es } from "date-fns/locale";
@@ -72,10 +72,13 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   const [assigneeEditorTaskId, setAssigneeEditorTaskId] = useState<string | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedTasks, setSelectedTasks] = useState<string[]>([]);
-  const [bulkBusy, setBulkBusy] = useState<"copy" | "delete" | null>(null);
+  const [bulkBusy, setBulkBusy] = useState<"copy" | "delete" | "move" | null>(null);
   const shellRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const columnResizeRef = useRef<ColumnResizeState | null>(null);
+  const autoScrollFrameRef = useRef<number | null>(null);
+  const autoScrollSpeedRef = useRef(0);
+  const autoScrollElementRef = useRef<HTMLElement | null>(null);
   const didMountItemsRef = useRef(false);
   const syncingFromParentRef = useRef(false);
 
@@ -207,7 +210,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
         const due = task.dueDate ? new Date(`${task.dueDate}T12:00:00`) : addDays(start, Math.max(0, task.duration - 1));
         return { ...task, startDate: dateValue(start), dueDate: dateValue(due), color: task.color || "#2f7669" };
       });
-      const signature = (list: Task[]) => JSON.stringify(list.map((task) => [task.id, task.parentId, task.title, task.section, task.status, task.progress, task.priority, task.startDate, task.dueDate, task.actualCompletionDate, task.color, task.assigneeIds, task.directoryAssigneeIds, task.manualAssignee, task.rollupProgress, task.taskTypeId, task.sortOrder]));
+      const signature = (list: Task[]) => JSON.stringify(list.map((task) => [task.id, task.parentId, task.title, task.section, task.status, task.progress, task.priority, task.startDate, task.dueDate, task.actualCompletionDate, task.color, task.assigneeIds, task.directoryAssigneeIds, task.manualAssignee, task.rollupProgress, task.taskTypeId, task.sortOrder, task.hasPrivateNote]));
       if (signature(current) === signature(normalized)) return current;
       syncingFromParentRef.current = true;
       return normalized;
@@ -470,14 +473,79 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
     return result;
   };
 
+  const selectedRootTasks = () => {
+    const selectedSet = new Set(selectedTasks);
+    return items.filter((task) => selectedSet.has(task.id) && !(() => {
+      let parentId = task.parentId;
+      const visited = new Set<string>();
+      while (parentId && !visited.has(parentId)) {
+        if (selectedSet.has(parentId)) return true;
+        visited.add(parentId);
+        parentId = items.find((item) => item.id === parentId)?.parentId;
+      }
+      return false;
+    })());
+  };
+
+  const moveSelectedHierarchy = async (parentId: string | null, section: string) => {
+    const roots = selectedRootTasks();
+    if (!roots.length) return;
+    const selectedBranches = new Set<string>();
+    roots.forEach((root) => branchIds(root.id).forEach((id) => selectedBranches.add(id)));
+    const parent = parentId ? items.find((task) => task.id === parentId) : undefined;
+    if (parentId && !parent) { setInteractionError("La tarea de destino ya no está disponible."); return; }
+    if (parent && selectedBranches.has(parent.id)) { setInteractionError("No puedes mover la selección dentro de una de sus propias ramas."); return; }
+    if (parent) {
+      const exceedsDepth = roots.some((root) => {
+        const branch = branchIds(root.id);
+        const subtreeDepth = Math.max(0, ...Array.from(branch).map((id) => taskDepth(items.find((task) => task.id === id)!, items) - taskDepth(root, items)));
+        return taskDepth(parent, items) + 1 + subtreeDepth > 3;
+      });
+      if (exceedsDepth) { setInteractionError("El destino no tiene espacio para toda la jerarquía seleccionada."); return; }
+    }
+
+    const nextSection = parent ? taskDisplaySection(parent, items) : section || "General";
+    const previous = items;
+    setBulkBusy("move");
+    setInteractionError("");
+    setItems((current) => current.map((task) => selectedBranches.has(task.id) ? {
+      ...task,
+      parentId: roots.some((root) => root.id === task.id) ? parent?.id : task.parentId,
+      section: nextSection,
+    } : task));
+    if (parent) setCollapsedParents((current) => current.filter((id) => id !== parent.id));
+
+    if (hasSupabaseConfig) {
+      const { error } = await createClient()!.rpc("move_tasks_in_hierarchy", {
+        target_tasks: selectedTasks,
+        new_parent: parent?.id || null,
+        target_section: nextSection,
+      });
+      if (error) {
+        setItems(previous);
+        const message = error.code === "PGRST202" ? "Falta aplicar la migración 202607230023_bulk_hierarchy_move.sql." : error.message;
+        setInteractionError(message);
+        setBulkBusy(null);
+        return;
+      }
+    }
+    setBulkBusy(null);
+  };
+
   const moveHierarchy = async (taskId: string, parentId: string | null, section: string) => {
+    if (autoScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(autoScrollFrameRef.current);
+      autoScrollFrameRef.current = null;
+      autoScrollSpeedRef.current = 0;
+      autoScrollElementRef.current = null;
+    }
     const moving = items.find((task) => task.id === taskId);
     const parent = parentId ? items.find((task) => task.id === parentId) : undefined;
     if (!moving || taskId === parentId) return;
     const branch = branchIds(taskId);
     if (parentId && branch.has(parentId)) { setInteractionError("No puedes mover una tarea dentro de su propia rama."); return; }
     const subtreeDepth = Math.max(0, ...Array.from(branch).map((id) => taskDepth(items.find((task) => task.id === id)!, items) - taskDepth(moving, items)));
-    if (parent && taskDepth(parent, items) + 1 + subtreeDepth > 2) { setInteractionError("El movimiento superaría el límite de sub-subtareas."); return; }
+    if (parent && taskDepth(parent, items) + 1 + subtreeDepth > 3) { setInteractionError("El movimiento superaría el límite de jerarquía."); return; }
     const nextSection = parent ? taskDisplaySection(parent, items) : section;
     const previous = items;
     setItems((current) => current.map((task) => branch.has(task.id) ? { ...task, parentId: task.id === taskId ? parentId || undefined : task.parentId, section: nextSection } : task));
@@ -487,26 +555,73 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
     const { error } = await createClient()!.rpc("move_task_in_hierarchy", { target_task: taskId, new_parent: parentId, target_section: nextSection });
     if (error) {
       setItems(previous);
-      setInteractionError(error.code === "PGRST202" ? "Falta aplicar la migración 202607170010_drag_hierarchy.sql." : error.message);
+      setInteractionError(error.code === "PGRST202" ? "Falta aplicar la migración 202607230023_bulk_hierarchy_move.sql." : error.message);
     }
   };
 
+  const stopDragAutoScroll = () => {
+    autoScrollSpeedRef.current = 0;
+    autoScrollElementRef.current = null;
+    if (autoScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(autoScrollFrameRef.current);
+      autoScrollFrameRef.current = null;
+    }
+  };
+
+  const runDragAutoScroll = () => {
+    const target = autoScrollElementRef.current;
+    const speed = autoScrollSpeedRef.current;
+    if (!target || !speed) { stopDragAutoScroll(); return; }
+    target.scrollTop += speed;
+    autoScrollFrameRef.current = window.requestAnimationFrame(runDragAutoScroll);
+  };
+
+  const updateDragAutoScroll = (clientY: number) => {
+    const fullscreenShell = document.fullscreenElement === shellRef.current ? shellRef.current : null;
+    const target = fullscreenShell || document.scrollingElement as HTMLElement | null;
+    if (!target) return;
+    const bounds = fullscreenShell?.getBoundingClientRect();
+    const top = bounds?.top ?? 0;
+    const bottom = bounds?.bottom ?? window.innerHeight;
+    const edge = Math.min(110, Math.max(70, (bottom - top) * 0.13));
+    let speed = 0;
+    if (clientY < top + edge) speed = -Math.max(3, Math.round((top + edge - clientY) / edge * 18));
+    else if (clientY > bottom - edge) speed = Math.max(3, Math.round((clientY - (bottom - edge)) / edge * 18));
+    if (!speed) { stopDragAutoScroll(); return; }
+    autoScrollElementRef.current = target;
+    autoScrollSpeedRef.current = speed;
+    if (autoScrollFrameRef.current === null) autoScrollFrameRef.current = window.requestAnimationFrame(runDragAutoScroll);
+  };
+
   const startHierarchyDrag = (event: React.DragEvent<HTMLDivElement>, taskId: string) => {
-    if (readOnly) return;
+    if (readOnly || bulkBusy === "move" || (selectionMode && !selectedTasks.includes(taskId))) {
+      event.preventDefault();
+      return;
+    }
     setHierarchyDrag(taskId); setHierarchyTarget(null);
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", taskId);
+    if (selectionMode && selectedTasks.length > 1) {
+      const ghost = document.createElement("div");
+      ghost.className = "gantt-multi-drag-ghost";
+      ghost.textContent = `${selectedTasks.length} tareas`;
+      document.body.appendChild(ghost);
+      event.dataTransfer.setDragImage(ghost, 18, 18);
+      window.requestAnimationFrame(() => ghost.remove());
+    }
   };
 
-  const dropOnTask = (event: React.DragEvent<HTMLDivElement>, parentId: string) => {
+  const dropOnTask = async (event: React.DragEvent<HTMLDivElement>, parentId: string) => {
     event.preventDefault(); event.stopPropagation();
     const taskId = hierarchyDrag || event.dataTransfer.getData("text/plain");
     const parent = items.find((task) => task.id === parentId);
-    if (taskId && parent) moveHierarchy(taskId, parentId, taskDisplaySection(parent, items));
+    if (!taskId || !parent) return;
+    if (selectionMode && selectedTasks.includes(taskId)) await moveSelectedHierarchy(parentId, taskDisplaySection(parent, items));
+    else await moveHierarchy(taskId, parentId, taskDisplaySection(parent, items));
   };
 
   const startDrag = (event: React.PointerEvent<HTMLDivElement>, task: Task) => {
-    if (readOnly || !task.startDate) return;
+    if (readOnly || selectionMode || !task.startDate) return;
     event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId);
     const start = new Date(`${task.startDate}T12:00:00`);
     const due = task.dueDate ? new Date(`${task.dueDate}T12:00:00`) : start;
@@ -515,6 +630,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   const moveDrag = (event: React.PointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current; if (!drag) return;
     if (Math.abs(event.clientY - drag.startY) > 16) {
+      updateDragAutoScroll(event.clientY);
       setHierarchyDrag(drag.taskId);
       const underPointer = document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null;
       const taskTarget = underPointer?.closest<HTMLElement>("[data-task-drop]")?.dataset.taskDrop;
@@ -531,6 +647,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   };
   const endDrag = async (event: React.PointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current; if (!drag) return;
+    stopDragAutoScroll();
     event.currentTarget.releasePointerCapture(event.pointerId); dragRef.current = null;
     if (Math.abs(event.clientY - drag.startY) > 16) {
       const underPointer = document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null;
@@ -567,7 +684,6 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   const taskWidth = (task: Task) => task.isMilestone ? 1 : task.startDate && task.dueDate ? Math.max(1, differenceInCalendarDays(new Date(`${task.dueDate}T12:00:00`), new Date(`${task.startDate}T12:00:00`)) + 1) : task.duration;
   const actualDelayOffset = (task: Task) => task.dueDate ? differenceInCalendarDays(new Date(`${task.dueDate}T12:00:00`), windowStart) + 1 : 0;
   const actualDelayWidth = (task: Task) => task.dueDate && task.actualCompletionDate ? Math.max(0, differenceInCalendarDays(new Date(`${task.actualCompletionDate}T12:00:00`), new Date(`${task.dueDate}T12:00:00`))) : 0;
-  const hierarchyLabel = (task: Task) => taskDepth(task, items) === 2 ? "Sub-subtarea" : taskDepth(task, items) === 1 ? "Subtarea" : "";
   const dayLabelEvery = rangeDays <= 30 ? 1 : rangeDays <= 60 ? 2 : rangeDays <= 90 ? 3 : 7;
   const visibleColumnOrder: ColumnKey[] = ["task", "taskType", "owner", "status", "priority", "progress", "startDate", "dueDate", "actualDate"];
   const gridTemplateColumns = `${visibleColumnOrder.filter((column) => visibleColumns[column]).map((column) => `${columnWidths[column]}px`).join(" ")} minmax(565px, 1fr)`;
@@ -578,15 +694,18 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
     { key: "taskType", label: "Tipo de tarea" }, { key: "owner", label: "Responsable" }, { key: "status", label: "Estado" }, { key: "priority", label: "Prioridad" },
     { key: "progress", label: "Avance" }, { key: "startDate", label: "Fecha de inicio" }, { key: "dueDate", label: "Fecha de fin" }, { key: "actualDate", label: "Fecha real" },
   ];
+  useEffect(() => () => {
+    if (autoScrollFrameRef.current !== null) window.cancelAnimationFrame(autoScrollFrameRef.current);
+  }, []);
 
   return (
-    <div className={`gantt-shell ${readOnly ? "gantt-readonly" : ""}`} ref={shellRef}>
+    <div className={`gantt-shell ${readOnly ? "gantt-readonly" : ""} ${selectionMode ? "gantt-selection-mode" : ""}`} ref={shellRef} onDragOver={(event) => { if (hierarchyDrag) updateDragAutoScroll(event.clientY); }}>
       <div className="gantt-toolbar">
         <div className="gantt-date-controls"><button className="icon-button period-button" onClick={() => setWindowStart((date) => addDays(date, -Math.ceil(rangeDays / 2)))} aria-label="Periodo anterior"><ChevronLeft size={17} /></button><button className="today-button" onClick={() => setWindowStart(startOfWeek(new Date(), { weekStartsOn: 1 }))}>Hoy</button><button className="icon-button period-button" onClick={() => setWindowStart((date) => addDays(date, Math.ceil(rangeDays / 2)))} aria-label="Periodo siguiente"><ChevronRight size={17} /></button><label className="range-select"><CalendarRange size={15} /><select value={rangeDays} onChange={(event) => setRangeDays(Number(event.target.value))}><option value={28}>4 semanas</option><option value={56}>8 semanas</option><option value={84}>12 semanas</option><option value={182}>26 semanas</option></select></label></div>
         <div className="gantt-toolbar-actions">{!simpleView && <><span className="wheel-hint">Shift + rueda para navegar</span><div className="column-visibility"><button type="button" className={`button secondary small columns-button ${columnsOpen ? "active" : ""}`} onClick={() => setColumnsOpen((current) => !current)} aria-label="Mostrar u ocultar columnas"><Columns3 size={15} /> Columnas</button>{columnsOpen && <div className="column-visibility-menu"><header><b>Columnas visibles</b><span>Personaliza esta vista</span></header>{columnOptions.map((option) => <label key={option.key}><input type="checkbox" checked={visibleColumns[option.key]} onChange={() => toggleColumn(option.key)} /><span>{option.label}</span><i /></label>)}</div>}</div></>}<button className={`button secondary small simple-view-button ${simpleView ? "active" : ""}`} onClick={() => setSimpleView((current) => !current)}><Presentation size={15} />{simpleView ? "Vista completa" : "Vista simple"}</button>{!simpleView && !readOnly && <><button className={`button secondary small selection-button ${selectionMode ? "active" : ""}`} onClick={() => { setSelectionMode((current) => !current); setSelectedTasks([]); }}><Check size={15} /> {selectionMode ? "Cancelar" : "Seleccionar"}</button><button className="button secondary small section-button" onClick={() => { setSectionError(""); setSectionOpen(true); }}><Plus size={15} /> Sección</button><button className="button primary small" onClick={openTaskCreator}><Plus size={16} /> Agregar tarea/hito</button></>}<button className="icon-button fullscreen-button" onClick={toggleFullscreen} aria-label={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"} title={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}>{isFullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button></div>
       </div>
       {interactionError && <div className="gantt-message"><AlertTriangle size={14} />{interactionError}<button onClick={() => setInteractionError("")}><X size={14} /></button></div>}
-      {selectionMode && <div className="gantt-selection-bar"><span><Check size={15} /><b>{selectedTasks.length}</b> {selectedTasks.length === 1 ? "tarea seleccionada" : "tareas seleccionadas"}</span><div><button className="button secondary small" onClick={() => setSelectedTasks(allVisibleSelected ? [] : visible.map((task) => task.id))}>{allVisibleSelected ? "Limpiar" : "Seleccionar visibles"}</button><button className="button danger-outline small" onClick={deleteSelectedTasks} disabled={!selectedTasks.length || bulkBusy !== null}><Trash2 size={14} />{bulkBusy === "delete" ? "Eliminando…" : "Eliminar"}</button><button className="button primary small" onClick={duplicateSelectedTasks} disabled={!selectedTasks.length || bulkBusy !== null}><CopyPlus size={14} />{bulkBusy === "copy" ? "Copiando…" : "Copiar"}</button></div></div>}
+      {selectionMode && <div className="gantt-selection-bar"><span><Check size={15} /><b>{selectedTasks.length}</b> {selectedTasks.length === 1 ? "tarea seleccionada" : "tareas seleccionadas"}{selectedTasks.length > 0 && <small>Arrastra cualquiera de las seleccionadas para mover el conjunto</small>}</span><div><button className="button secondary small" onClick={() => setSelectedTasks(allVisibleSelected ? [] : visible.map((task) => task.id))}>{allVisibleSelected ? "Limpiar" : "Seleccionar visibles"}</button><button className="button danger-outline small" onClick={deleteSelectedTasks} disabled={!selectedTasks.length || bulkBusy !== null}><Trash2 size={14} />{bulkBusy === "delete" ? "Eliminando…" : "Eliminar"}</button><button className="button primary small" onClick={duplicateSelectedTasks} disabled={!selectedTasks.length || bulkBusy !== null}><CopyPlus size={14} />{bulkBusy === "copy" ? "Copiando…" : "Copiar"}</button></div></div>}
       {simpleView && <div className="gantt-simple-scroll" onWheel={navigateWheel}>
         <div className="gantt-simple-stage" style={{ "--day-size": `${100 / rangeDays}%` } as React.CSSProperties}>
           <div className="gantt-simple-head">
@@ -626,7 +745,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
           {todayOffset >= 0 && todayOffset < rangeDays && <div className="today-line" style={{ left: `calc(${informationWidth}px + (100% - ${informationWidth}px) * ${todayOffset / rangeDays})` }} />}
           {sections.map((section) => (
             <div key={section} className="gantt-section-wrap">
-              <button data-section-drop={section} className={`gantt-section ${hierarchyDrag ? "hierarchy-drop-section" : ""} ${hierarchyTarget === `section:${section}` ? "drop-active" : ""}`} onClick={() => setCollapsed((state) => state.includes(section) ? state.filter((name) => name !== section) : [...state, section])} onDragOver={(event) => { if (!hierarchyDrag) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setHierarchyTarget(`section:${section}`); }} onDragLeave={() => setHierarchyTarget((current) => current === `section:${section}` ? null : current)} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); const taskId = hierarchyDrag || event.dataTransfer.getData("text/plain"); if (taskId) moveHierarchy(taskId, null, section); }}>
+              <button data-section-drop={section} className={`gantt-section ${hierarchyDrag ? "hierarchy-drop-section" : ""} ${hierarchyTarget === `section:${section}` ? "drop-active" : ""}`} onClick={() => setCollapsed((state) => state.includes(section) ? state.filter((name) => name !== section) : [...state, section])} onDragOver={(event) => { if (!hierarchyDrag) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setHierarchyTarget(`section:${section}`); }} onDragLeave={() => setHierarchyTarget((current) => current === `section:${section}` ? null : current)} onDrop={async (event) => { event.preventDefault(); event.stopPropagation(); const taskId = hierarchyDrag || event.dataTransfer.getData("text/plain"); if (!taskId) return; if (selectionMode && selectedTasks.includes(taskId)) await moveSelectedHierarchy(null, section); else await moveHierarchy(taskId, null, section); }}>
                 {collapsed.includes(section) ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
                 <b>{section}</b><span>{hierarchyDrag ? "Soltar como principal" : allTasksInSection(section).length}</span>
               </button>
@@ -640,11 +759,11 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
                 const taskDirectoryIds = task.directoryAssigneeIds || [];
                 const scheduleInvalid = Boolean(task.startDate && task.dueDate && task.dueDate < task.startDate);
                 const selectedType = projectTaskTypes.find((item) => item.id === task.taskTypeId);
-                return <div data-task-drop={task.id} className={`gantt-grid gantt-task-row ${scheduleInvalid ? "schedule-invalid" : ""} ${hierarchyTarget === task.id ? "hierarchy-drop-target" : ""} ${hierarchyDrag === task.id ? "hierarchy-dragging" : ""} ${assigneeEditorTaskId === task.id ? "assignee-row-editing" : ""}`} key={task.id} style={gridStyle} onDragOver={(event) => { if (!hierarchyDrag || hierarchyDrag === task.id) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setHierarchyTarget(task.id); }} onDragLeave={() => setHierarchyTarget((current) => current === task.id ? null : current)} onDrop={(event) => dropOnTask(event, task.id)}>
-                  <div className={`gantt-task-name task-depth-${depth}`} draggable={!readOnly && !selectionMode} onDragStart={(event) => startHierarchyDrag(event, task.id)} onDragEnd={() => { setHierarchyDrag(null); setHierarchyTarget(null); }} title={selectionMode ? "Selecciona tareas para aplicar acciones" : readOnly ? undefined : "Arrastra para convertirla en subtarea o moverla a una sección"}>
+                return <div data-task-drop={task.id} className={`gantt-grid gantt-task-row ${scheduleInvalid ? "schedule-invalid" : ""} ${hierarchyTarget === task.id ? "hierarchy-drop-target" : ""} ${hierarchyDrag === task.id ? "hierarchy-dragging" : ""} ${hierarchyDrag && selectionMode && selectedTasks.includes(task.id) ? "hierarchy-selection-dragging" : ""} ${assigneeEditorTaskId === task.id ? "assignee-row-editing" : ""}`} key={task.id} style={gridStyle} onDragOver={(event) => { if (!hierarchyDrag || hierarchyDrag === task.id) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setHierarchyTarget(task.id); }} onDragLeave={() => setHierarchyTarget((current) => current === task.id ? null : current)} onDrop={(event) => dropOnTask(event, task.id)}>
+                  <div className={`gantt-task-name task-depth-${depth}`} draggable={!readOnly && (!selectionMode || selectedTasks.includes(task.id)) && bulkBusy !== "move"} onDragStart={(event) => startHierarchyDrag(event, task.id)} onDragEnd={() => { stopDragAutoScroll(); setHierarchyDrag(null); setHierarchyTarget(null); }} title={selectionMode ? selectedTasks.includes(task.id) ? "Arrastra para mover todas las tareas seleccionadas" : "Selecciona esta tarea para incluirla" : readOnly ? undefined : "Arrastra para anidarla o moverla a una sección"}>
                     {selectionMode ? <button className={`task-selection-check ${selectedTasks.includes(task.id) ? "selected" : ""}`} onClick={() => toggleTaskSelection(task.id)} title="Seleccionar tarea">{selectedTasks.includes(task.id) && <Check size={12} />}</button> : <button className={`tiny-check ${task.status === "done" ? "checked" : ""}`} disabled={readOnly} onClick={() => updatePresentation(task.id, task.status === "done" ? "todo" : "done", task.color || colors[0])} title={readOnly ? "Estado visible en modo de consulta" : "Marcar como completada"}>{task.status === "done" && <Check size={12} />}</button>}
                     <span className="task-tree-control">{taskHasChildren ? <button type="button" className={`hierarchy-toggle ${depth > 0 ? "hierarchy-branch" : "hierarchy-root"} ${collapsedParents.includes(task.id) ? "collapsed" : ""}`} onClick={() => setCollapsedParents((current) => current.includes(task.id) ? current.filter((id) => id !== task.id) : [...current, task.id])} title={collapsedParents.includes(task.id) ? "Mostrar subtareas" : "Ocultar subtareas"} aria-label={collapsedParents.includes(task.id) ? "Mostrar subtareas" : "Ocultar subtareas"}>{depth > 0 ? <CornerDownRight size={13} /> : <span className="root-chevron" />}</button> : depth > 0 ? <CornerDownRight className="subtask-arrow" size={13} /> : <span className="hierarchy-spacer" />}</span>
-                    <span><span className="task-title-line"><button type="button" className="task-open-button" onClick={() => openTask(task)}>{task.title}</button></span>{(hierarchyLabel(task) || task.isMilestone) && <small>{hierarchyLabel(task) && <em>{hierarchyLabel(task)}</em>}{task.isMilestone && "Hito"}</small>}</span>
+                    <span><span className="task-title-line"><button type="button" className="task-open-button" onClick={() => openTask(task)}>{task.title}</button>{task.hasPrivateNote && <StickyNote className="task-note-marker" size={11} aria-label="Tienes apuntes privados" />}</span>{task.isMilestone && <small>Hito</small>}</span>
                     {!readOnly && !selectionMode && <button type="button" className="task-duplicate-button" onClick={() => duplicateTask(task)} title="Duplicar tarea"><CopyPlus size={13} /></button>}
                     {!readOnly && colorMode === "manual" && <input className="task-color-input" type="color" value={task.color || colors[0]} onChange={(event) => setItems((current) => current.map((item) => item.id === task.id ? { ...item, color: event.target.value } : item))} onBlur={(event) => updatePresentation(task.id, task.status, event.target.value)} title="Color de la tarea" />}
                   </div>
@@ -688,7 +807,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
           const taskHasChildren = hasChildren(task);
           const depth = taskDepth(task, items);
           return <article className={`mobile-task-card mobile-depth-${depth}`} key={task.id} style={{ borderLeftColor: taskDisplayColor(task, colorMode) }}>
-            <div>{selectionMode ? <button className={`task-selection-check ${selectedTasks.includes(task.id) ? "selected" : ""}`} onClick={() => toggleTaskSelection(task.id)} title="Seleccionar tarea">{selectedTasks.includes(task.id) && <Check size={12} />}</button> : <button className={`tiny-check ${task.status === "done" ? "checked" : ""}`} disabled={readOnly} onClick={() => updatePresentation(task.id, task.status === "done" ? "todo" : "done", task.color || colors[0])}>{task.status === "done" && <Check size={12} />}</button>}<span className="task-tree-control">{taskHasChildren ? <button type="button" className={`hierarchy-toggle ${depth > 0 ? "hierarchy-branch" : "hierarchy-root"} ${collapsedParents.includes(task.id) ? "collapsed" : ""}`} onClick={() => setCollapsedParents((current) => current.includes(task.id) ? current.filter((id) => id !== task.id) : [...current, task.id])}>{depth > 0 ? <CornerDownRight size={13} /> : <span className="root-chevron" />}</button> : depth > 0 ? <CornerDownRight className="subtask-arrow" size={13} /> : <span className="hierarchy-spacer" />}</span><span><span className="task-title-line"><button type="button" className="task-open-button" onClick={() => selectionMode ? toggleTaskSelection(task.id) : openTask(task)}>{task.title}</button></span>{(hierarchyLabel(task) || task.isMilestone) && <small>{hierarchyLabel(task) || "Hito"}</small>}</span><span className="mobile-owner-compact">{task.owner.name}</span></div>
+            <div>{selectionMode ? <button className={`task-selection-check ${selectedTasks.includes(task.id) ? "selected" : ""}`} onClick={() => toggleTaskSelection(task.id)} title="Seleccionar tarea">{selectedTasks.includes(task.id) && <Check size={12} />}</button> : <button className={`tiny-check ${task.status === "done" ? "checked" : ""}`} disabled={readOnly} onClick={() => updatePresentation(task.id, task.status === "done" ? "todo" : "done", task.color || colors[0])}>{task.status === "done" && <Check size={12} />}</button>}<span className="task-tree-control">{taskHasChildren ? <button type="button" className={`hierarchy-toggle ${depth > 0 ? "hierarchy-branch" : "hierarchy-root"} ${collapsedParents.includes(task.id) ? "collapsed" : ""}`} onClick={() => setCollapsedParents((current) => current.includes(task.id) ? current.filter((id) => id !== task.id) : [...current, task.id])}>{depth > 0 ? <CornerDownRight size={13} /> : <span className="root-chevron" />}</button> : depth > 0 ? <CornerDownRight className="subtask-arrow" size={13} /> : <span className="hierarchy-spacer" />}</span><span><span className="task-title-line"><button type="button" className="task-open-button" onClick={() => selectionMode ? toggleTaskSelection(task.id) : openTask(task)}>{task.title}</button>{task.hasPrivateNote && <StickyNote className="task-note-marker" size={11} aria-label="Tienes apuntes privados" />}</span>{task.isMilestone && <small>Hito</small>}</span><span className="mobile-owner-compact">{task.owner.name}</span></div>
             <div className="mobile-task-progress"><span><i style={{ width: `${task.progress}%`, background: taskDisplayColor(task, colorMode) }} /></span><b>{task.progress}%</b></div>
             <div className="mobile-task-foot"><span>{task.isMilestone ? <span className="milestone-label">Hito</span> : <TaskBadge status={task.status} label={projectStatuses.find((item) => item.status === task.status)?.label} color={projectStatuses.find((item) => item.status === task.status)?.color} />}</span><i className={`task-priority priority-${task.priority === 3 ? "alta" : task.priority === 1 ? "baja" : "media"}`}>{task.priority === 3 ? "Alta" : task.priority === 1 ? "Baja" : "Media"}</i>{task.blockedBy && <span className="dependency-note"><Link2 size={12} /> {task.blockedBy}</span>}</div>
           </article>;
