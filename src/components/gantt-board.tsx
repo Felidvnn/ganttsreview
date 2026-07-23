@@ -7,6 +7,7 @@ import {
 import { addDays, differenceInCalendarDays, format, startOfWeek } from "date-fns";
 import { es } from "date-fns/locale";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Person, Task, TaskStatus } from "@/lib/types";
 import { defaultProjectStatuses, type ProjectTaskStatus } from "@/lib/task-statuses";
 import { defaultProjectTaskTypes, taskTypeLabel, type ProjectTaskType } from "@/lib/task-types";
@@ -20,6 +21,7 @@ type AssignableMember = { user_id: string; full_name: string; email: string };
 type DragState = { taskId: string; startX: number; startY: number; width: number; start: Date; due: Date; deltaDays: number; previous: Task[] };
 type ColumnKey = "task" | "taskType" | "owner" | "status" | "priority" | "progress" | "startDate" | "dueDate" | "actualDate";
 type ColumnResizeState = { column: ColumnKey; startX: number; startWidth: number; min: number; max: number; scale: number };
+type AssigneePopoverPosition = { left: number; top?: number; bottom?: number; maxHeight: number; placement: "top" | "bottom" };
 
 const colors = ["#2f7669", "#3778a6", "#7f5aa6", "#c07a32", "#b64e4e", "#68766f"];
 const defaultColumnWidths: Record<ColumnKey, number> = { task: 235, taskType: 96, owner: 130, status: 90, priority: 78, progress: 70, startDate: 104, dueDate: 104, actualDate: 104 };
@@ -70,10 +72,13 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [simpleView, setSimpleView] = useState(false);
   const [assigneeEditorTaskId, setAssigneeEditorTaskId] = useState<string | null>(null);
+  const [assigneePopoverPosition, setAssigneePopoverPosition] = useState<AssigneePopoverPosition | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedTasks, setSelectedTasks] = useState<string[]>([]);
   const [bulkBusy, setBulkBusy] = useState<"copy" | "delete" | "move" | null>(null);
   const shellRef = useRef<HTMLDivElement>(null);
+  const columnVisibilityRef = useRef<HTMLDivElement>(null);
+  const assigneeAnchorRef = useRef<HTMLButtonElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const columnResizeRef = useRef<ColumnResizeState | null>(null);
   const autoScrollFrameRef = useRef<number | null>(null);
@@ -112,6 +117,22 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   useEffect(() => {
     if (!activeStatuses.some((item) => item.status === taskStatus)) setTaskStatus(activeStatuses[0]?.status ?? "todo");
   }, [activeStatuses, taskStatus]);
+
+  useEffect(() => {
+    if (!columnsOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!columnVisibilityRef.current?.contains(event.target as Node)) setColumnsOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setColumnsOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [columnsOpen]);
 
   useEffect(() => {
     try {
@@ -190,6 +211,63 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
     document.addEventListener("fullscreenchange", listener);
     return () => document.removeEventListener("fullscreenchange", listener);
   }, []);
+
+  const positionAssigneePopover = (anchor: HTMLButtonElement) => {
+    const rect = anchor.getBoundingClientRect();
+    const margin = 12;
+    const gap = 6;
+    const popoverWidth = Math.min(276, window.innerWidth - margin * 2);
+    const left = Math.min(
+      Math.max(margin, rect.left),
+      Math.max(margin, window.innerWidth - popoverWidth - margin),
+    );
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const placement = spaceBelow >= 310 || spaceBelow >= rect.top ? "bottom" : "top";
+    const maxHeight = Math.max(80, (placement === "bottom" ? spaceBelow : rect.top) - gap - margin);
+    setAssigneePopoverPosition(placement === "bottom"
+      ? { left, top: rect.bottom + gap, maxHeight, placement }
+      : { left, bottom: window.innerHeight - rect.top + gap, maxHeight, placement });
+  };
+
+  const closeAssigneeEditor = () => {
+    setAssigneeEditorTaskId(null);
+    setAssigneePopoverPosition(null);
+    assigneeAnchorRef.current = null;
+  };
+
+  const toggleAssigneeEditor = (event: React.MouseEvent<HTMLButtonElement>, taskId: string) => {
+    if (readOnly) return;
+    if (assigneeEditorTaskId === taskId) {
+      closeAssigneeEditor();
+      return;
+    }
+    assigneeAnchorRef.current = event.currentTarget;
+    positionAssigneePopover(event.currentTarget);
+    setAssigneeEditorTaskId(taskId);
+  };
+
+  useEffect(() => {
+    if (!assigneeEditorTaskId) return;
+    const updatePosition = () => {
+      const anchor = assigneeAnchorRef.current;
+      if (!anchor?.isConnected) {
+        closeAssigneeEditor();
+        return;
+      }
+      positionAssigneePopover(anchor);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeAssigneeEditor();
+    };
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [assigneeEditorTaskId]);
 
   useEffect(() => {
     if (!didMountItemsRef.current) {
@@ -694,6 +772,9 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
     { key: "taskType", label: "Tipo de tarea" }, { key: "owner", label: "Responsable" }, { key: "status", label: "Estado" }, { key: "priority", label: "Prioridad" },
     { key: "progress", label: "Avance" }, { key: "startDate", label: "Fecha de inicio" }, { key: "dueDate", label: "Fecha de fin" }, { key: "actualDate", label: "Fecha real" },
   ];
+  const assigneeEditorTask = assigneeEditorTaskId ? items.find((task) => task.id === assigneeEditorTaskId) : undefined;
+  const assigneeEditorUserIds = assigneeEditorTask?.assigneeIds || (assigneeEditorTask?.assigneeId ? [assigneeEditorTask.assigneeId] : []);
+  const assigneeEditorDirectoryIds = assigneeEditorTask?.directoryAssigneeIds || [];
   useEffect(() => () => {
     if (autoScrollFrameRef.current !== null) window.cancelAnimationFrame(autoScrollFrameRef.current);
   }, []);
@@ -702,7 +783,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
     <div className={`gantt-shell ${readOnly ? "gantt-readonly" : ""} ${selectionMode ? "gantt-selection-mode" : ""}`} ref={shellRef} onDragOver={(event) => { if (hierarchyDrag) updateDragAutoScroll(event.clientY); }}>
       <div className="gantt-toolbar">
         <div className="gantt-date-controls"><button className="icon-button period-button" onClick={() => setWindowStart((date) => addDays(date, -Math.ceil(rangeDays / 2)))} aria-label="Periodo anterior"><ChevronLeft size={17} /></button><button className="today-button" onClick={() => setWindowStart(startOfWeek(new Date(), { weekStartsOn: 1 }))}>Hoy</button><button className="icon-button period-button" onClick={() => setWindowStart((date) => addDays(date, Math.ceil(rangeDays / 2)))} aria-label="Periodo siguiente"><ChevronRight size={17} /></button><label className="range-select"><CalendarRange size={15} /><select value={rangeDays} onChange={(event) => setRangeDays(Number(event.target.value))}><option value={28}>4 semanas</option><option value={56}>8 semanas</option><option value={84}>12 semanas</option><option value={182}>26 semanas</option></select></label></div>
-        <div className="gantt-toolbar-actions">{!simpleView && <><span className="wheel-hint">Shift + rueda para navegar</span><div className="column-visibility"><button type="button" className={`button secondary small columns-button ${columnsOpen ? "active" : ""}`} onClick={() => setColumnsOpen((current) => !current)} aria-label="Mostrar u ocultar columnas"><Columns3 size={15} /> Columnas</button>{columnsOpen && <div className="column-visibility-menu"><header><b>Columnas visibles</b><span>Personaliza esta vista</span></header>{columnOptions.map((option) => <label key={option.key}><input type="checkbox" checked={visibleColumns[option.key]} onChange={() => toggleColumn(option.key)} /><span>{option.label}</span><i /></label>)}</div>}</div></>}<button className={`button secondary small simple-view-button ${simpleView ? "active" : ""}`} onClick={() => setSimpleView((current) => !current)}><Presentation size={15} />{simpleView ? "Vista completa" : "Vista simple"}</button>{!simpleView && !readOnly && <><button className={`button secondary small selection-button ${selectionMode ? "active" : ""}`} onClick={() => { setSelectionMode((current) => !current); setSelectedTasks([]); }}><Check size={15} /> {selectionMode ? "Cancelar" : "Seleccionar"}</button><button className="button secondary small section-button" onClick={() => { setSectionError(""); setSectionOpen(true); }}><Plus size={15} /> Sección</button><button className="button primary small" onClick={openTaskCreator}><Plus size={16} /> Agregar tarea/hito</button></>}<button className="icon-button fullscreen-button" onClick={toggleFullscreen} aria-label={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"} title={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}>{isFullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button></div>
+        <div className="gantt-toolbar-actions">{!simpleView && <><span className="wheel-hint">Shift + rueda para navegar</span><div className="column-visibility" ref={columnVisibilityRef}><button type="button" className={`button secondary small columns-button ${columnsOpen ? "active" : ""}`} onClick={() => setColumnsOpen((current) => !current)} aria-label="Mostrar u ocultar columnas" aria-expanded={columnsOpen}><Columns3 size={15} /> Columnas</button>{columnsOpen && <div className="column-visibility-menu"><header><b>Columnas visibles</b><span>Personaliza esta vista</span></header>{columnOptions.map((option) => <label key={option.key}><input type="checkbox" checked={visibleColumns[option.key]} onChange={() => toggleColumn(option.key)} /><span>{option.label}</span><i /></label>)}</div>}</div></>}<button className={`button secondary small simple-view-button ${simpleView ? "active" : ""}`} onClick={() => setSimpleView((current) => !current)}><Presentation size={15} />{simpleView ? "Vista completa" : "Vista simple"}</button>{!simpleView && !readOnly && <><button className={`button secondary small selection-button ${selectionMode ? "active" : ""}`} onClick={() => { setSelectionMode((current) => !current); setSelectedTasks([]); }}><Check size={15} /> {selectionMode ? "Cancelar" : "Seleccionar"}</button><button className="button secondary small section-button" onClick={() => { setSectionError(""); setSectionOpen(true); }}><Plus size={15} /> Sección</button><button className="button primary small" onClick={openTaskCreator}><Plus size={16} /> Agregar tarea/hito</button></>}<button className="icon-button fullscreen-button" onClick={toggleFullscreen} aria-label={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"} title={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}>{isFullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button></div>
       </div>
       {interactionError && <div className="gantt-message"><AlertTriangle size={14} />{interactionError}<button onClick={() => setInteractionError("")}><X size={14} /></button></div>}
       {selectionMode && <div className="gantt-selection-bar"><span><Check size={15} /><b>{selectedTasks.length}</b> {selectedTasks.length === 1 ? "tarea seleccionada" : "tareas seleccionadas"}{selectedTasks.length > 0 && <small>Arrastra cualquiera de las seleccionadas para mover el conjunto</small>}</span><div><button className="button secondary small" onClick={() => setSelectedTasks(allVisibleSelected ? [] : visible.map((task) => task.id))}>{allVisibleSelected ? "Limpiar" : "Seleccionar visibles"}</button><button className="button danger-outline small" onClick={deleteSelectedTasks} disabled={!selectedTasks.length || bulkBusy !== null}><Trash2 size={14} />{bulkBusy === "delete" ? "Eliminando…" : "Eliminar"}</button><button className="button primary small" onClick={duplicateSelectedTasks} disabled={!selectedTasks.length || bulkBusy !== null}><CopyPlus size={14} />{bulkBusy === "copy" ? "Copiando…" : "Copiar"}</button></div></div>}
@@ -755,8 +836,6 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
                 const priorityLabel = task.priority === 3 ? "Alta" : task.priority === 1 ? "Baja" : "Media";
                 const statusColor = projectStatuses.find((item) => item.status === task.status)?.color || "#68766f";
                 const taskOwners = task.owners?.length ? task.owners : [task.owner];
-                const taskUserIds = task.assigneeIds || (task.assigneeId ? [task.assigneeId] : []);
-                const taskDirectoryIds = task.directoryAssigneeIds || [];
                 const scheduleInvalid = Boolean(task.startDate && task.dueDate && task.dueDate < task.startDate);
                 const selectedType = projectTaskTypes.find((item) => item.id === task.taskTypeId);
                 return <div data-task-drop={task.id} className={`gantt-grid gantt-task-row ${scheduleInvalid ? "schedule-invalid" : ""} ${hierarchyTarget === task.id ? "hierarchy-drop-target" : ""} ${hierarchyDrag === task.id ? "hierarchy-dragging" : ""} ${hierarchyDrag && selectionMode && selectedTasks.includes(task.id) ? "hierarchy-selection-dragging" : ""} ${assigneeEditorTaskId === task.id ? "assignee-row-editing" : ""}`} key={task.id} style={gridStyle} onDragOver={(event) => { if (!hierarchyDrag || hierarchyDrag === task.id) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setHierarchyTarget(task.id); }} onDragLeave={() => setHierarchyTarget((current) => current === task.id ? null : current)} onDrop={(event) => dropOnTask(event, task.id)}>
@@ -769,22 +848,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
                   </div>
                   {visibleColumns.taskType && <div className="gantt-task-type" style={{ "--task-type-color": selectedType?.color || task.taskTypeColor || "#6b7d75" } as React.CSSProperties}>{readOnly || !projectTaskTypes.length ? <span><i />{selectedType?.name || task.taskTypeName || taskTypeLabel(task.taskTypeId, projectTaskTypes, task.isMilestone)}</span> : <select value={task.taskTypeId || ""} onChange={(event) => updateTaskType(task.id, event.target.value)} aria-label={`Tipo de ${task.title}`}><option value="">Sin tipo</option>{projectTaskTypes.map((type) => <option value={type.id} key={type.id}>{type.name}</option>)}</select>}</div>}
                   {visibleColumns.owner && <div className={`gantt-owner ${assigneeEditorTaskId === task.id ? "editing" : ""}`}>
-                    <button type="button" className="gantt-owner-summary" onClick={() => readOnly ? undefined : setAssigneeEditorTaskId((current) => current === task.id ? null : task.id)} title={readOnly ? taskOwners.map((owner) => owner.name).join(", ") : "Editar responsables aquí"}><span className="mini-owner-stack">{taskOwners.slice(0, 2).map((owner) => <Avatar person={owner} size="sm" key={owner.id} />)}</span><span>{taskOwners.map((owner) => owner.name).join(", ") || "Sin asignar"}</span>{taskOwners.length > 2 && <b>+{taskOwners.length - 2}</b>}</button>
-                    {!readOnly && assigneeEditorTaskId === task.id && <>
-                      <button type="button" className="gantt-assignee-dismiss" aria-label="Cerrar responsables" onClick={() => setAssigneeEditorTaskId(null)} />
-                      <div className="gantt-assignee-popover" role="dialog" aria-label={`Responsables de ${task.title}`} onClick={(event) => event.stopPropagation()}>
-                        <header><div><b>Responsables</b><span>Selecciona uno o más</span></div><button type="button" onClick={() => setAssigneeEditorTaskId(null)} aria-label="Cerrar"><X size={14} /></button></header>
-                        <div className="gantt-assignee-options">
-                          {members.map((member) => {
-                            const externalId = member.user_id.startsWith("external:") ? member.user_id.replace("external:", "") : "";
-                            const selected = externalId ? taskDirectoryIds.includes(externalId) || (!taskDirectoryIds.length && task.manualAssignee === member.full_name) : taskUserIds.includes(member.user_id);
-                            return <label className={selected ? "selected" : ""} key={member.user_id}><input type="checkbox" checked={selected} onChange={() => toggleInlineAssignee(task, member)} /><i>{initials(member.full_name || member.email)}</i><span>{member.full_name || member.email}</span><Check size={12} /></label>;
-                          })}
-                          {!members.length && <p>No hay responsables disponibles todavía.</p>}
-                        </div>
-                        <button type="button" className="gantt-assignee-manage" onClick={() => { setAssigneeEditorTaskId(null); openTask(task); }}><Plus size={13} /> Agregar otro nombre o ver detalles</button>
-                      </div>
-                    </>}
+                    <button type="button" className="gantt-owner-summary" onClick={(event) => toggleAssigneeEditor(event, task.id)} title={readOnly ? taskOwners.map((owner) => owner.name).join(", ") : "Editar responsables aquí"} aria-expanded={assigneeEditorTaskId === task.id}><span className="mini-owner-stack">{taskOwners.slice(0, 2).map((owner) => <Avatar person={owner} size="sm" key={owner.id} />)}</span><span>{taskOwners.map((owner) => owner.name).join(", ") || "Sin asignar"}</span>{taskOwners.length > 2 && <b>+{taskOwners.length - 2}</b>}</button>
                   </div>}
                   {visibleColumns.status && <div className="gantt-status status-tinted" style={{ "--status-cell-color": statusColor } as React.CSSProperties}>{readOnly ? <TaskBadge status={task.status} label={projectStatuses.find((item) => item.status === task.status)?.label} color={statusColor} /> : <select value={task.status} onChange={(event) => updatePresentation(task.id, event.target.value as TaskStatus, task.color || colors[0])}>{statuses.map((status) => <option value={status.value} key={status.value}>{status.label}</option>)}</select>}</div>}
                   {visibleColumns.priority && <div className="gantt-priority">{readOnly ? <span className={`priority-value priority-${priorityLabel.toLowerCase()}`}>{priorityLabel}</span> : <select className={`priority-select priority-${priorityLabel.toLowerCase()}`} value={task.priority || 2} onChange={(event) => updatePriority(task.id, Number(event.target.value) as 1 | 2 | 3)} aria-label={`Prioridad de ${task.title}`}><option value={1}>Baja</option><option value={2}>Media</option><option value={3}>Alta</option></select>}</div>}
@@ -815,6 +879,30 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
         {!visible.length && <div className="gantt-empty"><Check size={18} /><b>Aún no hay tareas visibles</b><span>{items.length ? "Expande una tarea o sección para ver sus subtareas." : readOnly ? "Este proyecto todavía no tiene planificación." : "Agrega la primera tarea para comenzar."}</span></div>}
       </div>}
       {!simpleView && !readOnly && !selectionMode && <button className="gantt-add-bottom" onClick={openTaskCreator}><Plus size={16} /> Agregar tarea/hito</button>}
+
+      {!readOnly && assigneeEditorTask && assigneePopoverPosition && typeof document !== "undefined" && createPortal(<>
+        <button type="button" className="gantt-assignee-dismiss" aria-label="Cerrar responsables" onClick={closeAssigneeEditor} />
+        <div
+          className={`gantt-assignee-popover placement-${assigneePopoverPosition.placement}`}
+          role="dialog"
+          aria-label={`Responsables de ${assigneeEditorTask.title}`}
+          style={{ left: assigneePopoverPosition.left, top: assigneePopoverPosition.top, bottom: assigneePopoverPosition.bottom, maxHeight: assigneePopoverPosition.maxHeight }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <header><div><b>Responsables</b><span>Selecciona uno o más</span></div><button type="button" onClick={closeAssigneeEditor} aria-label="Cerrar"><X size={14} /></button></header>
+          <div className="gantt-assignee-options">
+            {members.map((member) => {
+              const externalId = member.user_id.startsWith("external:") ? member.user_id.replace("external:", "") : "";
+              const selected = externalId
+                ? assigneeEditorDirectoryIds.includes(externalId) || (!assigneeEditorDirectoryIds.length && assigneeEditorTask.manualAssignee === member.full_name)
+                : assigneeEditorUserIds.includes(member.user_id);
+              return <label className={selected ? "selected" : ""} key={member.user_id}><input type="checkbox" checked={selected} onChange={() => toggleInlineAssignee(assigneeEditorTask, member)} /><i>{initials(member.full_name || member.email)}</i><span>{member.full_name || member.email}</span><Check size={12} /></label>;
+            })}
+            {!members.length && <p>No hay responsables disponibles todavía.</p>}
+          </div>
+          <button type="button" className="gantt-assignee-manage" onClick={() => { closeAssigneeEditor(); openTask(assigneeEditorTask); }}><Plus size={13} /> Agregar otro nombre o ver detalles</button>
+        </div>
+      </>, isFullscreen && shellRef.current ? shellRef.current : document.body)}
 
       {createOpen && <div className="modal-layer" role="dialog" aria-modal="true" aria-label={createKind === "milestone" ? "Nuevo hito" : "Nueva tarea"}><button className="modal-backdrop" onClick={() => setCreateOpen(false)} /><section className="modal-card task-create-modal"><div className="modal-head"><div><span className="eyebrow">PLANIFICACIÓN</span><h2>{createKind === "milestone" ? "Nuevo hito" : "Nueva tarea"}</h2></div><button className="icon-button" onClick={() => setCreateOpen(false)}><X size={19} /></button></div><form onSubmit={createTask}><div className="task-kind-switch"><button type="button" className={createKind === "task" ? "active" : ""} onClick={() => setCreateKind("task")}>Tarea</button><button type="button" className={createKind === "milestone" ? "active" : ""} onClick={() => setCreateKind("milestone")}>Hito</button></div><label className="field-label">Nombre<input name="title" autoFocus placeholder={createKind === "milestone" ? "Ej. Aprobación de ingeniería" : "Ej. Revisar ingeniería de detalle"} required /></label><div className="form-grid"><label className="field-label">Sección<div className="section-select-row"><select value={taskSection} onChange={(event) => setTaskSection(event.target.value)}>{sections.map((section) => <option value={section} key={section}>{section}</option>)}</select><button type="button" className="icon-button" onClick={() => { setSectionError(""); setSectionOpen(true); }} title="Agregar sección"><Plus size={17} /></button></div></label><label className="field-label">Estado<select value={taskStatus} onChange={(event) => setTaskStatus(event.target.value as TaskStatus)}>{statuses.map((status) => <option value={status.value} key={status.value}>{status.label}</option>)}</select></label></div><div className="form-grid">{createKind === "task" && <label className="field-label">Inicio<input name="start_date" type="date" /></label>}<label className="field-label">{createKind === "milestone" ? "Fecha del hito" : "Fecha límite"}<input name="due_date" type="date" /></label></div><div className="multi-assignee-field create-task-assignees"><span>Responsables</span><div>{members.map((member) => { const selected = createAssignees.includes(member.user_id); return <button type="button" className={selected ? "selected" : ""} aria-pressed={selected} onClick={() => setCreateAssignees((current) => current.includes(member.user_id) ? current.filter((id) => id !== member.user_id) : [...current, member.user_id])} key={member.user_id}><i>{initials(member.full_name)}</i><b>{member.full_name || member.email}</b><Check size={12} /></button>; })}{!members.length && <small>No hay integrantes ni responsables guardados.</small>}</div><label className="new-project-assignee"><span>Agregar responsable del proyecto</span><input value={manualAssignee} onChange={(event) => setManualAssignee(event.target.value)} placeholder="Nombre de proveedor, contacto o apoyo" /><small>Quedará disponible para las próximas tareas.</small></label></div><label className="field-label">Prioridad<select value={taskPriority} onChange={(event) => setTaskPriority(Number(event.target.value) as 1 | 2 | 3)}><option value={1}>Baja</option><option value={2}>Media</option><option value={3}>Alta</option></select></label><div className="task-color-picker"><span>Color</span><div>{colors.map((color) => <button type="button" key={color} className={taskColor === color ? "selected" : ""} style={{ background: color }} onClick={() => setTaskColor(color)} aria-label={`Usar color ${color}`} />)}<label title="Color personalizado"><input type="color" value={taskColor} onChange={(event) => setTaskColor(event.target.value)} /></label></div></div>{createError && <p className="form-error">{createError}</p>}<div className="modal-actions"><button type="button" className="button secondary" onClick={() => setCreateOpen(false)}>Cancelar</button><button className="button primary" disabled={creating}>{creating ? "Creando..." : `Crear ${createKind === "milestone" ? "hito" : "tarea"}`}</button></div></form></section></div>}
       {sectionOpen && <div className="modal-layer nested-modal" role="dialog" aria-modal="true" aria-label="Nueva sección"><button className="modal-backdrop" onClick={() => setSectionOpen(false)} /><section className="modal-card section-modal"><div className="modal-head"><div><span className="eyebrow">ESTRUCTURA</span><h2>Nueva sección</h2></div><button className="icon-button" onClick={() => setSectionOpen(false)}><X size={19} /></button></div><label className="field-label">Nombre<input autoFocus value={sectionDraft} onChange={(event) => setSectionDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addProjectSection(); } }} placeholder="Ej. Ingeniería, Compras o Puesta en marcha" /></label>{sectionError && <p className="form-error">{sectionError}</p>}<div className="modal-actions"><button type="button" className="button secondary" onClick={() => setSectionOpen(false)}>Cancelar</button><button type="button" className="button primary" disabled={sectionSaving || !sectionDraft.trim()} onClick={addProjectSection}>{sectionSaving ? "Guardando..." : "Agregar sección"}</button></div></section></div>}
