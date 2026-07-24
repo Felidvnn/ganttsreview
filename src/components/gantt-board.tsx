@@ -295,8 +295,8 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
     });
   }, [initialTasks, projectBase]);
 
-  const openTaskCreator = () => {
-    setCreateError(""); setCreateKind("task"); setTaskSection(sections[0] ?? "General");
+  const openTaskCreator = (targetSection?: string) => {
+    setCreateError(""); setCreateKind("task"); setTaskSection(targetSection || sections[0] || "General");
     setTaskColor(colors[0]); setTaskStatus("todo"); setTaskPriority(2); setCreateAssignees([]); setManualAssignee(""); setCreateOpen(true);
   };
 
@@ -766,6 +766,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   const visibleColumnOrder: ColumnKey[] = ["task", "taskType", "owner", "status", "priority", "progress", "startDate", "dueDate", "actualDate"];
   const gridTemplateColumns = `${visibleColumnOrder.filter((column) => visibleColumns[column]).map((column) => `${columnWidths[column]}px`).join(" ")} minmax(565px, 1fr)`;
   const informationWidth = visibleColumnOrder.filter((column) => visibleColumns[column]).reduce((sum, column) => sum + columnWidths[column], 0);
+  const informationColumnCount = visibleColumnOrder.filter((column) => visibleColumns[column]).length;
   const gridStyle = { gridTemplateColumns } as React.CSSProperties;
   const prettyDate = (value?: string) => value ? format(new Date(`${value}T12:00:00`), "dd MMM yy", { locale: es }) : "Sin fecha";
   const columnOptions: { key: ColumnKey; label: string }[] = [
@@ -783,7 +784,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
     <div className={`gantt-shell ${readOnly ? "gantt-readonly" : ""} ${selectionMode ? "gantt-selection-mode" : ""}`} ref={shellRef} onDragOver={(event) => { if (hierarchyDrag) updateDragAutoScroll(event.clientY); }}>
       <div className="gantt-toolbar">
         <div className="gantt-date-controls"><button className="icon-button period-button" onClick={() => setWindowStart((date) => addDays(date, -Math.ceil(rangeDays / 2)))} aria-label="Periodo anterior"><ChevronLeft size={17} /></button><button className="today-button" onClick={() => setWindowStart(startOfWeek(new Date(), { weekStartsOn: 1 }))}>Hoy</button><button className="icon-button period-button" onClick={() => setWindowStart((date) => addDays(date, Math.ceil(rangeDays / 2)))} aria-label="Periodo siguiente"><ChevronRight size={17} /></button><label className="range-select"><CalendarRange size={15} /><select value={rangeDays} onChange={(event) => setRangeDays(Number(event.target.value))}><option value={28}>4 semanas</option><option value={56}>8 semanas</option><option value={84}>12 semanas</option><option value={182}>26 semanas</option></select></label></div>
-        <div className="gantt-toolbar-actions">{!simpleView && <><span className="wheel-hint">Shift + rueda para navegar</span><div className="column-visibility" ref={columnVisibilityRef}><button type="button" className={`button secondary small columns-button ${columnsOpen ? "active" : ""}`} onClick={() => setColumnsOpen((current) => !current)} aria-label="Mostrar u ocultar columnas" aria-expanded={columnsOpen}><Columns3 size={15} /> Columnas</button>{columnsOpen && <div className="column-visibility-menu"><header><b>Columnas visibles</b><span>Personaliza esta vista</span></header>{columnOptions.map((option) => <label key={option.key}><input type="checkbox" checked={visibleColumns[option.key]} onChange={() => toggleColumn(option.key)} /><span>{option.label}</span><i /></label>)}</div>}</div></>}<button className={`button secondary small simple-view-button ${simpleView ? "active" : ""}`} onClick={() => setSimpleView((current) => !current)}><Presentation size={15} />{simpleView ? "Vista completa" : "Vista simple"}</button>{!simpleView && !readOnly && <><button className={`button secondary small selection-button ${selectionMode ? "active" : ""}`} onClick={() => { setSelectionMode((current) => !current); setSelectedTasks([]); }}><Check size={15} /> {selectionMode ? "Cancelar" : "Seleccionar"}</button><button className="button secondary small section-button" onClick={() => { setSectionError(""); setSectionOpen(true); }}><Plus size={15} /> Sección</button><button className="button primary small" onClick={openTaskCreator}><Plus size={16} /> Agregar tarea/hito</button></>}<button className="icon-button fullscreen-button" onClick={toggleFullscreen} aria-label={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"} title={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}>{isFullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button></div>
+        <div className="gantt-toolbar-actions">{!simpleView && <><span className="wheel-hint">Shift + rueda para navegar</span><div className="column-visibility" ref={columnVisibilityRef}><button type="button" className={`button secondary small columns-button ${columnsOpen ? "active" : ""}`} onClick={() => setColumnsOpen((current) => !current)} aria-label="Mostrar u ocultar columnas" aria-expanded={columnsOpen}><Columns3 size={15} /> Columnas</button>{columnsOpen && <div className="column-visibility-menu"><header><b>Columnas visibles</b><span>Personaliza esta vista</span></header>{columnOptions.map((option) => <label key={option.key}><input type="checkbox" checked={visibleColumns[option.key]} onChange={() => toggleColumn(option.key)} /><span>{option.label}</span><i /></label>)}</div>}</div></>}<button className={`button secondary small simple-view-button ${simpleView ? "active" : ""}`} onClick={() => setSimpleView((current) => !current)}><Presentation size={15} />{simpleView ? "Vista completa" : "Vista simple"}</button>{!simpleView && !readOnly && <><button className={`button secondary small selection-button ${selectionMode ? "active" : ""}`} onClick={() => { setSelectionMode((current) => !current); setSelectedTasks([]); }}><Check size={15} /> {selectionMode ? "Cancelar" : "Seleccionar"}</button><button className="button secondary small section-button" onClick={() => { setSectionError(""); setSectionOpen(true); }}><Plus size={15} /> Sección</button><button className="button primary small" onClick={() => openTaskCreator()}><Plus size={16} /> Agregar tarea/hito</button></>}<button className="icon-button fullscreen-button" onClick={toggleFullscreen} aria-label={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"} title={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}>{isFullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button></div>
       </div>
       {interactionError && <div className="gantt-message"><AlertTriangle size={14} />{interactionError}<button onClick={() => setInteractionError("")}><X size={14} /></button></div>}
       {selectionMode && <div className="gantt-selection-bar"><span><Check size={15} /><b>{selectedTasks.length}</b> {selectedTasks.length === 1 ? "tarea seleccionada" : "tareas seleccionadas"}{selectedTasks.length > 0 && <small>Arrastra cualquiera de las seleccionadas para mover el conjunto</small>}</span><div><button className="button secondary small" onClick={() => setSelectedTasks(allVisibleSelected ? [] : visible.map((task) => task.id))}>{allVisibleSelected ? "Limpiar" : "Seleccionar visibles"}</button><button className="button danger-outline small" onClick={deleteSelectedTasks} disabled={!selectedTasks.length || bulkBusy !== null}><Trash2 size={14} />{bulkBusy === "delete" ? "Eliminando…" : "Eliminar"}</button><button className="button primary small" onClick={duplicateSelectedTasks} disabled={!selectedTasks.length || bulkBusy !== null}><CopyPlus size={14} />{bulkBusy === "copy" ? "Copiando…" : "Copiar"}</button></div></div>}
@@ -830,7 +831,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
                 {collapsed.includes(section) ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
                 <b>{section}</b><span>{hierarchyDrag ? "Soltar como principal" : allTasksInSection(section).length}</span>
               </button>
-              {!collapsed.includes(section) && tasksInSection(section).map((task) => {
+              {!collapsed.includes(section) && <>{tasksInSection(section).map((task) => {
                 const taskHasChildren = hasChildren(task);
                 const depth = taskDepth(task, items);
                 const priorityLabel = task.priority === 3 ? "Alta" : task.priority === 1 ? "Baja" : "Media";
@@ -859,6 +860,14 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
                   <div className="gantt-timeline">{actualDelayWidth(task) > 0 && <span className="gantt-actual-delay" style={{ left: `${actualDelayOffset(task) / rangeDays * 100}%`, width: `${actualDelayWidth(task) / rangeDays * 100}%` }} title={`${actualDelayWidth(task)} días de atraso real`} />}<div className={`gantt-bar bar-${task.status} ${task.isMilestone ? "gantt-milestone" : ""} ${dragRef.current?.taskId === task.id ? "dragging" : ""}`} style={{ left: `${taskOffset(task) / rangeDays * 100}%`, width: task.isMilestone ? "18px" : `${taskWidth(task) / rangeDays * 100}%`, "--task-color": taskDisplayColor(task, colorMode) } as React.CSSProperties} title={`${task.title} · clic para abrir · arrastra para cambiar fechas`} onPointerDown={(event) => startDrag(event, task)} onPointerMove={moveDrag} onPointerUp={endDrag}><i style={{ width: `${task.progress}%` }} /><span>{task.isMilestone ? "" : task.progress > 0 ? `${task.progress}%` : ""}</span>{task.status === "blocked" && <AlertTriangle size={13} />}</div></div>
                 </div>;
               })}
+              {!readOnly && !selectionMode && <div className="gantt-grid gantt-section-add-row" style={gridStyle}>
+                <button type="button" className="gantt-section-add-action" style={{ gridColumn: `1 / ${informationColumnCount + 1}` }} onClick={() => openTaskCreator(section)} aria-label={`Agregar tarea o hito en ${section}`}>
+                  <span><Plus size={13} /></span>
+                  <span><b>Agregar nueva tarea o hito</b><small>Se guardará en {section}</small></span>
+                </button>
+                <button type="button" className="gantt-section-add-timeline" onClick={() => openTaskCreator(section)} tabIndex={-1} aria-label={`Agregar planificación en ${section}`}><span><Plus size={11} /> Nueva planificación en esta sección</span></button>
+              </div>}
+              </>}
             </div>
           ))}
           {!items.length && <div className="gantt-empty"><Check size={18} /><b>Aún no hay tareas</b><span>{readOnly ? "Este proyecto todavía no tiene planificación." : "Agrega una tarea o hito dentro de cualquiera de las secciones."}</span></div>}
@@ -878,7 +887,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
         })}
         {!visible.length && <div className="gantt-empty"><Check size={18} /><b>Aún no hay tareas visibles</b><span>{items.length ? "Expande una tarea o sección para ver sus subtareas." : readOnly ? "Este proyecto todavía no tiene planificación." : "Agrega la primera tarea para comenzar."}</span></div>}
       </div>}
-      {!simpleView && !readOnly && !selectionMode && <button className="gantt-add-bottom" onClick={openTaskCreator}><Plus size={16} /> Agregar tarea/hito</button>}
+      {!simpleView && !readOnly && !selectionMode && <button className="gantt-add-bottom" onClick={() => openTaskCreator()}><Plus size={16} /> Agregar tarea/hito</button>}
 
       {!readOnly && assigneeEditorTask && assigneePopoverPosition && typeof document !== "undefined" && createPortal(<>
         <button type="button" className="gantt-assignee-dismiss" aria-label="Cerrar responsables" onClick={closeAssigneeEditor} />
