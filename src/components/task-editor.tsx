@@ -9,6 +9,7 @@ import { defaultProjectStatuses, type ProjectTaskStatus } from "@/lib/task-statu
 import { defaultProjectTaskTypes, type ProjectTaskType } from "@/lib/task-types";
 import { sortTasksByDate, taskDepth } from "@/lib/task-order";
 import { createClient, hasSupabaseConfig } from "@/lib/supabase/client";
+import { ModalPortal } from "./modal-portal";
 
 export type AssignableMember = { user_id: string; full_name: string; email: string };
 
@@ -280,7 +281,7 @@ export function TaskEditor({ task, allTasks, sections, members, canEdit, project
     setSubtaskTitle(""); setSubtaskManualOwner(""); setBusy(false); await loadContext();
   };
 
-  return <div className="modal-layer task-editor-layer" role="dialog" aria-modal="true" aria-label={`Editar ${task.title}`}>
+  return <ModalPortal><div className="modal-layer task-editor-layer" role="dialog" aria-modal="true" aria-label={`Editar ${task.title}`}>
     <button className="modal-backdrop" onClick={onClose} />
     <section className="modal-card task-editor-modal">
       <header className="task-editor-head">
@@ -328,5 +329,5 @@ export function TaskEditor({ task, allTasks, sections, members, canEdit, project
         <footer className="task-editor-actions">{canEdit && <button type="button" className="button danger-outline" onClick={removeTask} disabled={busy}><Trash2 size={15} /> Eliminar</button>}<span /><button type="button" className="button secondary" onClick={onClose}>Cerrar</button>{canEdit && <button className="button primary" disabled={busy}><Save size={15} /> {busy ? "Guardando…" : "Guardar"}</button>}</footer>
       </form>
     </section>
-  </div>;
+  </div></ModalPortal>;
 }

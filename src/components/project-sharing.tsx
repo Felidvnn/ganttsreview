@@ -6,13 +6,17 @@ import { useState } from "react";
 import type { Person, Project } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
 import { Avatar } from "./avatar";
+import { ModalPortal } from "./modal-portal";
 
 type VisibilityKey = Project["visibilityKey"];
 
-export function ProjectSharing({ projectId, members, visibility }: { projectId: string; members: Person[]; visibility: VisibilityKey }) {
+export function ProjectSharing({ projectId, members, visibility, showToLeader }: { projectId: string; members: Person[]; visibility: VisibilityKey; showToLeader: boolean }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [selectedVisibility, setSelectedVisibility] = useState<VisibilityKey>(visibility);
+  const [collaborationEnabled, setCollaborationEnabled] = useState(visibility === "workspace");
+  const [leaderVisible, setLeaderVisible] = useState(showToLeader);
+  const [savedCollaboration, setSavedCollaboration] = useState(visibility === "workspace");
+  const [savedLeaderVisible, setSavedLeaderVisible] = useState(showToLeader);
   const [email, setEmail] = useState("");
   const [permission, setPermission] = useState<"editor" | "viewer">("editor");
   const [busy, setBusy] = useState(false);
@@ -28,18 +32,37 @@ export function ProjectSharing({ projectId, members, visibility }: { projectId: 
     return result;
   };
 
-  const saveVisibility = async () => {
+  const persistAccess = async (nextCollaboration = collaborationEnabled, nextLeaderVisible = leaderVisible) => {
+    const result = await runWithFreshSession(() => createClient()!.rpc("configure_project_access", {
+      target_project: projectId,
+      collaboration_enabled: nextCollaboration,
+      show_to_leader: nextLeaderVisible,
+    }));
+    if (!result.error) {
+      setSavedCollaboration(nextCollaboration);
+      setSavedLeaderVisible(nextLeaderVisible);
+    }
+    return result;
+  };
+
+  const saveAccess = async () => {
     setBusy(true); setMessage(null);
-    const { error } = await runWithFreshSession(() => createClient()!.rpc("set_project_visibility", { target_project: projectId, next_visibility: selectedVisibility }));
+    const { error } = await persistAccess();
     if (error) setMessage({ ok: false, text: error.message });
-    else { setMessage({ ok: true, text: "Visibilidad actualizada." }); router.refresh(); }
+    else { setMessage({ ok: true, text: "Acceso del proyecto actualizado." }); router.refresh(); }
     setBusy(false);
   };
   const share = async (event: React.FormEvent) => {
     event.preventDefault(); setBusy(true); setMessage(null);
+    const accessResult = await persistAccess(true, leaderVisible);
+    if (accessResult.error) {
+      setMessage({ ok: false, text: accessResult.error.message });
+      setBusy(false);
+      return;
+    }
     const { error } = await runWithFreshSession(() => createClient()!.rpc("share_project_with_email", { target_project: projectId, target_email: email, target_permission: permission }));
     if (error) setMessage({ ok: false, text: error.message });
-    else { setSelectedVisibility("workspace"); setMessage({ ok: true, text: "Acceso colaborativo guardado." }); setEmail(""); router.refresh(); }
+    else { setCollaborationEnabled(true); setMessage({ ok: true, text: "Acceso colaborativo guardado." }); setEmail(""); router.refresh(); }
     setBusy(false);
   };
   const remove = async (member: Person) => {
@@ -53,16 +76,27 @@ export function ProjectSharing({ projectId, members, visibility }: { projectId: 
 
   return <>
     <button className="button secondary" onClick={() => setOpen(true)}><Share2 size={16} /> Acceso</button>
-    {open && <div className="modal-layer" role="dialog" aria-modal="true" aria-label="Configurar acceso al proyecto"><button className="modal-backdrop" onClick={() => setOpen(false)} aria-label="Cerrar" /><section className="modal-card share-modal"><div className="modal-head"><div><span className="eyebrow">VISIBILIDAD Y COLABORACIÓN</span><h2>Acceso al proyecto</h2><p>Decide quién puede verlo y participar.</p></div><button className="icon-button" onClick={() => setOpen(false)}><X size={19} /></button></div>
+    {open && <ModalPortal><div className="modal-layer" role="dialog" aria-modal="true" aria-label="Configurar acceso al proyecto"><button className="modal-backdrop" onClick={() => setOpen(false)} aria-label="Cerrar" /><section className="modal-card share-modal"><div className="modal-head"><div><span className="eyebrow">VISIBILIDAD Y COLABORACIÓN</span><h2>Acceso al proyecto</h2><p>Configura por separado quién colabora y si tu líder puede hacer seguimiento.</p></div><button className="icon-button" onClick={() => setOpen(false)}><X size={19} /></button></div>
+      <span className="access-section-label">1 · COLABORACIÓN</span>
       <div className="visibility-options">
-        <button type="button" className={selectedVisibility === "private" ? "selected" : ""} onClick={() => setSelectedVisibility("private")}><LockKeyhole /><span><b>Privado</b><small>Solo tú puedes verlo; se revocan los accesos existentes.</small></span>{selectedVisibility === "private" && <Check />}</button>
-        <button type="button" className={selectedVisibility === "shared" ? "selected" : ""} onClick={() => setSelectedVisibility("shared")}><Crown /><span><b>Con mi líder</b><small>Tu líder puede abrirlo y hacer seguimiento. Se revocan otros accesos.</small></span>{selectedVisibility === "shared" && <Check />}</button>
-        <button type="button" className={selectedVisibility === "workspace" ? "selected" : ""} onClick={() => setSelectedVisibility("workspace")}><Users /><span><b>Colaborativo</b><small>Solo las personas que invites podrán participar.</small></span>{selectedVisibility === "workspace" && <Check />}</button>
+        <button type="button" className={!collaborationEnabled ? "selected" : ""} onClick={() => setCollaborationEnabled(false)}><LockKeyhole /><span><b>Personal</b><small>Los colaboradores dejan de verlo, pero sus accesos quedan guardados por si los restauras.</small></span>{!collaborationEnabled && <Check />}</button>
+        <button type="button" className={collaborationEnabled ? "selected" : ""} onClick={() => setCollaborationEnabled(true)}><Users /><span><b>Colaborativo</b><small>Las personas que invites podrán verlo o editarlo según su permiso.</small></span>{collaborationEnabled && <Check />}</button>
       </div>
-      <button className="button secondary visibility-save" onClick={saveVisibility} disabled={busy || selectedVisibility === visibility}>{busy ? "Guardando..." : "Guardar visibilidad"}</button>
+      <span className="access-section-label">2 · SEGUIMIENTO DEL LÍDER</span>
+      <label className="leader-visibility-choice">
+        <span className="leader-access-icon"><Crown size={17} /></span>
+        <span><b>Mostrar a mi líder</b><small>Podrá abrir el proyecto y revisar su avance. No podrá editarlo salvo que también lo invites como editor.</small></span>
+        <input type="checkbox" checked={leaderVisible} onChange={(event) => setLeaderVisible(event.target.checked)} />
+        <i />
+      </label>
+      <div className="access-result">
+        <span className={collaborationEnabled ? "active" : ""}><Users size={13} /> {collaborationEnabled ? "Colaboradores habilitados" : "Sin colaboradores activos"}</span>
+        <span className={leaderVisible ? "active leader" : ""}><Crown size={13} /> {leaderVisible ? "Visible para el líder" : "Oculto para el líder"}</span>
+      </div>
+      <button className="button secondary visibility-save" onClick={saveAccess} disabled={busy || (collaborationEnabled === savedCollaboration && leaderVisible === savedLeaderVisible)}>{busy ? "Guardando..." : "Guardar configuración"}</button>
 
-      {selectedVisibility === "workspace" && <><form onSubmit={share} className="share-form"><label className="field-label">Correo de la persona<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="persona@correo.cl" required /></label><div className="share-permissions"><button type="button" className={permission === "editor" ? "selected" : ""} onClick={() => setPermission("editor")}><Pencil /><span><b>Puede editar</b><small>Gestiona tareas y planificación</small></span></button><button type="button" className={permission === "viewer" ? "selected" : ""} onClick={() => setPermission("viewer")}><Eye /><span><b>Solo lectura</b><small>Consulta sin hacer cambios</small></span></button></div><button className="button primary" disabled={busy}>{busy ? "Guardando..." : "Invitar al proyecto"}</button></form><div className="share-members"><span className="eyebrow">CON ACCESO · {members.length}</span>{members.map((member) => <div key={member.id}><Avatar person={member} size="sm" /><span><b>{member.name}</b><small>{member.email || (member.permission === "owner" ? "Propietario" : member.permission === "editor" ? "Puede editar" : "Solo lectura")}</small></span><span className={`permission-label permission-${member.permission}`}>{member.permission === "owner" ? "Propietario" : member.permission === "editor" ? "Editor" : "Lector"}</span>{member.permission !== "owner" && <button className="icon-button danger-button" disabled={busy} onClick={() => remove(member)}><Trash2 size={15} /></button>}</div>)}</div></>}
+      {collaborationEnabled && <><form onSubmit={share} className="share-form"><label className="field-label">Correo de la persona<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="persona@correo.cl" required /></label><div className="share-permissions"><button type="button" className={permission === "editor" ? "selected" : ""} onClick={() => setPermission("editor")}><Pencil /><span><b>Puede editar</b><small>Gestiona tareas y planificación</small></span></button><button type="button" className={permission === "viewer" ? "selected" : ""} onClick={() => setPermission("viewer")}><Eye /><span><b>Solo lectura</b><small>Consulta sin hacer cambios</small></span></button></div><button className="button primary" disabled={busy}>{busy ? "Guardando..." : "Invitar al proyecto"}</button></form><div className="share-members"><span className="eyebrow">CON ACCESO · {members.length}</span>{members.map((member) => <div key={member.id}><Avatar person={member} size="sm" /><span><b>{member.name}</b><small>{member.email || (member.permission === "owner" ? "Propietario" : member.permission === "editor" ? "Puede editar" : "Solo lectura")}</small></span><span className={`permission-label permission-${member.permission}`}>{member.permission === "owner" ? "Propietario" : member.permission === "editor" ? "Editor" : "Lector"}</span>{member.permission !== "owner" && <button className="icon-button danger-button" disabled={busy} onClick={() => remove(member)}><Trash2 size={15} /></button>}</div>)}</div></>}
       {message && <div className={`share-message ${message.ok ? "ok" : "error"}`}>{message.ok ? <Check /> : <X />}{message.text}</div>}
-    </section></div>}
+    </section></div></ModalPortal>}
   </>;
 }

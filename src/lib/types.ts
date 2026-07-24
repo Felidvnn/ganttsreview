@@ -35,6 +35,7 @@ export type Project = {
   blockedTasks?: number;
   visibility: "Colaborativo" | "Con líder" | "Privado";
   visibilityKey: "workspace" | "shared" | "private";
+  showToLeader?: boolean;
   taskOrderMode?: "date" | "manual";
 };
 

@@ -20,7 +20,7 @@ export function ProjectCard({ project, showOwner = false }: { project: Project; 
       <div className="project-progress-head"><span>Avance</span><b>{project.progress}%</b></div>
       <div className="linear-progress"><i style={{ width: `${project.progress}%`, backgroundColor: project.color }} /></div>
       <div className="project-meta"><HealthBadge health={project.health} /><span><CalendarDays size={14} /> {project.dueLabel}</span></div>
-      <div className="project-card-foot"><AvatarGroup people={project.members} /><span><i className="project-visibility-icon">{project.visibilityKey === "private" ? <LockKeyhole /> : project.visibilityKey === "shared" ? <Crown /> : <Users />}</i>{project.visibility}</span></div>
+      <div className="project-card-foot"><AvatarGroup people={project.members} /><span><i className={`project-visibility-icon ${project.visibilityKey === "workspace" && project.showToLeader ? "combined" : ""}`}>{project.visibilityKey === "private" ? <LockKeyhole /> : project.visibilityKey === "shared" ? <Crown /> : <><Users />{project.showToLeader && <Crown />}</>}</i>{project.visibilityKey === "workspace" && project.showToLeader ? "Colaborativo · Líder" : project.visibility}</span></div>
     </Link>
   );
 }

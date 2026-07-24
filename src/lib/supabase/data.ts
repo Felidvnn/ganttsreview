@@ -2,17 +2,26 @@ import "server-only";
 import { differenceInCalendarDays, format } from "date-fns";
 import { es } from "date-fns/locale";
 import { people, projects as demoProjects, tasks as demoTasks } from "@/lib/demo-data";
-import type { Person, Project, ProjectHealth, Task, TaskStatus } from "@/lib/types";
+import type { Person, Project, Task, TaskStatus } from "@/lib/types";
+import { calculateProjectScheduleMetrics } from "@/lib/project-health";
 import { sortTasksByDate, sortTasksManual } from "@/lib/task-order";
 import { hasSupabaseConfig } from "./client";
 import { createServerSupabaseClient } from "./server";
 
 type DbProfile = { id: string; full_name: string; email?: string | null; job_title?: string | null };
 type DbMember = { user_id: string; permission?: "owner" | "editor" | "viewer"; profiles?: DbProfile | DbProfile[] | null };
-type DbTaskCount = { id: string; status: string; progress: number; due_date: string | null; is_milestone: boolean };
+type DbTaskCount = {
+  id: string;
+  parent_id?: string | null;
+  status: string;
+  progress: number;
+  start_date?: string | null;
+  due_date: string | null;
+  is_milestone: boolean;
+};
 type DbProject = {
   id: string; workspace_id: string; name: string; code: string; description: string; progress: number; health: string;
-  due_date: string | null; start_date: string | null; color: string; visibility: string;
+  due_date: string | null; start_date: string | null; color: string; visibility: string; visible_to_leader?: boolean;
   created_by?: string;
   task_order_mode?: "date" | "manual";
   creator?: DbProfile | DbProfile[] | null; project_members?: DbMember[]; tasks?: DbTaskCount[];
@@ -51,19 +60,27 @@ function mapProject(row: DbProject): Project {
   today.setHours(0, 0, 0, 0);
   const start = row.start_date ? new Date(`${row.start_date}T12:00:00`) : null;
   const due = row.due_date ? new Date(`${row.due_date}T12:00:00`) : null;
-  const progress = projectTasks.length ? Math.round(projectTasks.reduce((sum, task) => sum + (task.progress ?? (task.status === "done" ? 100 : 0)), 0) / projectTasks.length) : row.progress ?? 0;
-  const expectedProgress = start && due
-    ? today <= start ? 0 : today >= due ? 100 : Math.round((today.getTime() - start.getTime()) / Math.max(1, due.getTime() - start.getTime()) * 100)
-    : progress;
-  const hasOverdueTask = projectTasks.some((task) => task.status !== "done" && task.due_date && new Date(`${task.due_date}T23:59:59`) < today);
-  const projectOverdue = Boolean(due && due < today && progress < 100);
-  const health: ProjectHealth = hasOverdueTask || projectOverdue || row.health === "delayed" ? "delayed" : row.health === "risk" || expectedProgress - progress >= 10 ? "risk" : "healthy";
+  const metrics = calculateProjectScheduleMetrics({
+    tasks: projectTasks.map((task) => ({
+      parentId: task.parent_id,
+      status: task.status,
+      progress: task.progress,
+      startDate: task.start_date,
+      dueDate: task.due_date,
+      isMilestone: task.is_milestone,
+    })),
+    fallbackProgress: row.progress ?? 0,
+    projectDueDate: row.due_date,
+    now: today,
+  });
+  const { progress, expectedProgress, health } = metrics;
   const milestones = projectTasks.filter((task) => task.is_milestone);
   return {
     id: row.id, workspaceId: row.workspace_id, createdBy: row.created_by, name: row.name, code: row.code, description: row.description ?? "", progress,
     expectedProgress, health, dueLabel: due ? format(due, "dd MMM", { locale: es }) : "Sin fecha",
     dueDate: row.due_date ?? "", startDate: row.start_date ?? "", startLabel: start ? format(start, "dd MMM", { locale: es }) : "Sin fecha",
     color: row.color ?? "#2f7669", members, visibilityKey,
+    showToLeader: row.visible_to_leader ?? visibilityKey !== "private",
     tasksDone: projectTasks.filter((task) => task.status === "done").length, tasksTotal: projectTasks.length, visibility,
     milestonesDone: milestones.filter((task) => task.status === "done").length, milestonesTotal: milestones.length,
     blockedTasks: projectTasks.filter((task) => task.status === "blocked").length,
@@ -74,7 +91,7 @@ function mapProject(row: DbProject): Project {
 export async function getProjects(): Promise<Project[]> {
   if (!hasSupabaseConfig) return demoProjects;
   const supabase = await createServerSupabaseClient();
-  const { data, error } = await supabase!.from("projects").select("*, creator:profiles!projects_created_by_fkey(id,full_name,job_title), project_members(user_id,permission,profiles!project_members_user_id_fkey(id,full_name,job_title)), tasks(id,status,progress,due_date,is_milestone)").is("archived_at", null).order("updated_at", { ascending: false });
+  const { data, error } = await supabase!.from("projects").select("*, creator:profiles!projects_created_by_fkey(id,full_name,job_title), project_members(user_id,permission,profiles!project_members_user_id_fkey(id,full_name,job_title)), tasks(id,parent_id,status,progress,start_date,due_date,is_milestone)").is("archived_at", null).order("updated_at", { ascending: false });
   if (error) throw new Error(`No se pudieron cargar los proyectos: ${error.message}`);
   return ((data ?? []) as unknown as DbProject[]).map(mapProject);
 }
@@ -88,7 +105,7 @@ export async function getProjectBundle(id: string): Promise<{ project: Project; 
   }
   const supabase = await createServerSupabaseClient();
   const [projectResult, taskResult, sessionResult] = await Promise.all([
-    supabase!.from("projects").select("*, creator:profiles!projects_created_by_fkey(id,full_name,job_title), project_members(user_id,permission,profiles!project_members_user_id_fkey(id,full_name,job_title)), tasks(id,status,progress,due_date,is_milestone)").eq("id", id).single(),
+    supabase!.from("projects").select("*, creator:profiles!projects_created_by_fkey(id,full_name,job_title), project_members(user_id,permission,profiles!project_members_user_id_fkey(id,full_name,job_title)), tasks(id,parent_id,status,progress,start_date,due_date,is_milestone)").eq("id", id).single(),
     supabase!.from("tasks").select("*, project_task_types!tasks_task_type_id_fkey(id,name,color), task_assignees(user_id,profiles!task_assignees_user_id_fkey(id, full_name, job_title)), task_directory_assignees(assignee_id,project_external_assignees!task_directory_assignees_assignee_id_fkey(id,name))").eq("project_id", id).order("sort_order"),
     supabase!.auth.getUser(),
   ]);

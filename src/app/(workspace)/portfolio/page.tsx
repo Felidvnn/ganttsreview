@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { AvatarGroup } from "@/components/avatar";
 import { DependencyMap } from "@/components/dependency-map";
 import { HealthBadge } from "@/components/status";
+import { PROJECT_RISK_GAP } from "@/lib/project-health";
 import { getProjects } from "@/lib/supabase/data";
 import { getShellContext } from "@/lib/supabase/group-data";
 import { getDependencyData } from "@/lib/supabase/dependency-data";
@@ -42,7 +43,7 @@ export default async function PortfolioPage() {
         <div className="panel-head"><div><span className="eyebrow">PROYECTOS</span><h3>Estado del portafolio</h3></div></div>
         <div className="portfolio-table">
           <div className="portfolio-tr portfolio-th"><span>PROYECTO</span><span>AVANCE</span><span>DESVIACIÓN</span><span>EQUIPO</span><span>ESTADO</span><span>FECHA FIN</span><span /></div>
-          {projects.map((project) => <Link href={`/projects/${project.id}`} className="portfolio-tr" key={project.id}><span className="portfolio-project"><i style={{ background: project.color }} /><span><b>{project.name}</b><small>{project.code}</small></span></span><span className="table-progress"><span><i style={{ width: `${project.progress}%`, background: project.color }} /></span><b>{project.progress}%</b></span><span className={project.progress >= project.expectedProgress ? "positive" : project.expectedProgress - project.progress > 10 ? "negative" : "neutral"}>{project.progress - project.expectedProgress > 0 ? "+" : ""}{project.progress - project.expectedProgress} pts</span><AvatarGroup people={project.members} max={3} /><HealthBadge health={project.health} /><span>{project.dueLabel}</span><ChevronDown size={16} /></Link>)}
+          {projects.map((project) => <Link href={`/projects/${project.id}`} className="portfolio-tr" key={project.id}><span className="portfolio-project"><i style={{ background: project.color }} /><span><b>{project.name}</b><small>{project.code}</small></span></span><span className="table-progress"><span><i style={{ width: `${project.progress}%`, background: project.color }} /></span><b>{project.progress}%</b></span><span className={project.progress >= project.expectedProgress ? "positive" : project.expectedProgress - project.progress >= PROJECT_RISK_GAP ? "negative" : "neutral"}>{project.progress - project.expectedProgress > 0 ? "+" : ""}{project.progress - project.expectedProgress} pts</span><AvatarGroup people={project.members} max={3} /><HealthBadge health={project.health} /><span>{project.dueLabel}</span><ChevronDown size={16} /></Link>)}
         </div>
       </section>
 

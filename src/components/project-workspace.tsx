@@ -4,6 +4,7 @@ import { Activity, AlertTriangle, ArrowUpDown, BarChart3, CalendarCheck, Clipboa
 import { differenceInCalendarDays, format } from "date-fns";
 import { es } from "date-fns/locale";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { calculateProjectScheduleMetrics } from "@/lib/project-health";
 import type { Project, Task, TaskStatus } from "@/lib/types";
 import { defaultProjectStatuses, statusLabel, type ProjectTaskStatus } from "@/lib/task-statuses";
 import { defaultProjectTaskTypes, taskTypeLabel, type ProjectTaskType } from "@/lib/task-types";
@@ -86,8 +87,13 @@ export function ProjectWorkspace({ project, initialTasks, canEdit }: { project: 
   const sections = useMemo(() => [...projectSections, ...Array.from(new Set(tasks.map((task) => task.section))).filter((name) => !projectSections.includes(name))], [projectSections, tasks]);
   const milestones = tasks.filter((task) => task.isMilestone);
   const completedTasks = tasks.filter((task) => task.status === "done").length;
-  const progressBasis = tasks.filter((task) => !task.parentId);
-  const currentProgress = progressBasis.length ? Math.round(progressBasis.reduce((sum, task) => sum + task.progress, 0) / progressBasis.length) : 0;
+  const scheduleMetrics = useMemo(() => calculateProjectScheduleMetrics({
+    tasks,
+    fallbackProgress: project.progress,
+    projectDueDate: project.dueDate,
+  }), [project.dueDate, project.progress, tasks]);
+  const currentProgress = scheduleMetrics.progress;
+  const currentExpectedProgress = scheduleMetrics.expectedProgress;
   const nextMilestone = milestones.filter((task) => task.status !== "done" && task.dueDate).sort((left, right) => left.dueDate!.localeCompare(right.dueDate!))[0];
   const milestoneDays = nextMilestone?.dueDate ? differenceInCalendarDays(new Date(`${nextMilestone.dueDate}T12:00:00`), new Date()) : null;
   const handleTasksChange = useCallback((nextTasks: Task[]) => setTasks(applyTaskRollups(nextTasks, orderMode)), [orderMode]);
@@ -186,7 +192,7 @@ export function ProjectWorkspace({ project, initialTasks, canEdit }: { project: 
   return <>
     <section className="project-summary-strip">
       <div><small>AVANCE REAL</small><b>{currentProgress}%</b><span className="summary-progress"><i style={{ width: `${currentProgress}%`, background: project.color }} /></span></div>
-      <div><small>AVANCE ESPERADO</small><b>{project.expectedProgress}%</b><span className={currentProgress < project.expectedProgress ? "negative" : "positive"}>{currentProgress - project.expectedProgress > 0 ? "+" : ""}{currentProgress - project.expectedProgress} pts</span></div>
+      <div><small>AVANCE ESPERADO</small><b>{currentExpectedProgress}%</b><span className={currentProgress < currentExpectedProgress ? "negative" : "positive"}>{currentProgress - currentExpectedProgress > 0 ? "+" : ""}{currentProgress - currentExpectedProgress} pts</span></div>
       <div><small>TAREAS</small><b>{completedTasks}<em> / {tasks.length}</em></b><span>{tasks.length - completedTasks} pendientes</span></div>
       <div><small>PRÓXIMO HITO</small><b className="summary-text">{nextMilestone?.title ?? "Sin hitos pendientes"}</b><span><Clock3 size={13} />{nextMilestone?.dueDate ? `${format(new Date(`${nextMilestone.dueDate}T12:00:00`), "dd MMM", { locale: es })}${milestoneDays !== null ? ` · ${milestoneDays >= 0 ? `en ${milestoneDays} días` : `atrasado ${Math.abs(milestoneDays)} días`}` : ""}` : "Agrega un hito desde Crear"}</span></div>
     </section>
