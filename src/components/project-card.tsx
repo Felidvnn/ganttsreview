@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { CalendarDays, Crown, LockKeyhole, Users } from "lucide-react";
+import { CalendarDays, Crown, LockKeyhole, Timer, TrendingDown, Users } from "lucide-react";
 import type { Project } from "@/lib/types";
 import { Avatar, AvatarGroup } from "./avatar";
 import { HealthBadge } from "./status";
@@ -19,6 +19,10 @@ export function ProjectCard({ project, showOwner = false }: { project: Project; 
       <h3>{project.name}</h3><p>{project.description}</p>
       <div className="project-progress-head"><span>Avance</span><b>{project.progress}%</b></div>
       <div className="linear-progress"><i style={{ width: `${project.progress}%`, backgroundColor: project.color }} /></div>
+      {(project.capturableName || project.hhtTransformed !== undefined) && <div className="project-impact-line">
+        {project.capturableName && <span title={`Capturable: ${project.capturableName}`}><TrendingDown size={12} /><em>{project.capturableName}</em>{project.capturableReductionPercent !== undefined && <b>−{project.capturableReductionPercent}%</b>}</span>}
+        {project.hhtTransformed !== undefined && <span title="Horas hombre transformadas"><Timer size={12} /><b>{new Intl.NumberFormat("es-CL", { maximumFractionDigits: 2 }).format(project.hhtTransformed)} HHT</b></span>}
+      </div>}
       <div className="project-meta"><HealthBadge health={project.health} /><span><CalendarDays size={14} /> {project.dueLabel}</span></div>
       <div className="project-card-foot"><AvatarGroup people={project.members} /><span><i className={`project-visibility-icon ${project.visibilityKey === "workspace" && project.showToLeader ? "combined" : ""}`}>{project.visibilityKey === "private" ? <LockKeyhole /> : project.visibilityKey === "shared" ? <Crown /> : <><Users />{project.showToLeader && <Crown />}</>}</i>{project.visibilityKey === "workspace" && project.showToLeader ? "Colaborativo · Líder" : project.visibility}</span></div>
     </Link>

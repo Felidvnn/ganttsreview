@@ -25,7 +25,7 @@ const nav = [
 
 const titles: Record<string, string> = {
   "/dashboard": "Inicio", "/projects": "Proyectos", "/portfolio": "Portafolio", "/calendar": "Calendario",
-  "/week": "Seguimiento", "/team": "Grupo", "/settings": "Configuración",
+  "/week": "Seguimiento", "/team": "Grupo", "/settings": "Configuración", "/help": "Ayuda",
 };
 
 type ShellContext = {
@@ -95,7 +95,7 @@ export function AppShell({ children, shell }: { children: React.ReactNode; shell
         </nav>
         <div className="sidebar-bottom">
           <Link href="/settings" className={`nav-item ${pathname === "/settings" ? "active" : ""}`}><Settings size={19} /><span>Configuración</span></Link>
-          <button className="nav-item nav-button" disabled title="Ayuda disponible próximamente"><CircleHelp size={19} /><span>Ayuda</span></button>
+          <Link href="/help" className={`nav-item ${pathname === "/help" ? "active" : ""}`}><CircleHelp size={19} /><span>Ayuda</span></Link>
           <button className="profile-card" onClick={async () => { await createClient()?.auth.signOut(); router.push("/login"); router.refresh(); }} title="Cerrar sesión">
             <Avatar person={profile} />
             <span className="profile-copy"><b>{profile.name}</b><small>{shell ? `${shell.role === "leader" ? "Líder" : "Ingeniero"}${shell.isAdmin && shell.role !== "leader" ? " · Admin" : ""} · ${shell.groupName}` : "Modo demostración"}</small></span>

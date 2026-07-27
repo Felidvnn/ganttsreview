@@ -22,6 +22,7 @@ type DbTaskCount = {
 type DbProject = {
   id: string; workspace_id: string; name: string; code: string; description: string; progress: number; health: string;
   due_date: string | null; start_date: string | null; color: string; visibility: string; visible_to_leader?: boolean;
+  capturable_name?: string | null; capturable_reduction_percent?: number | null; hht_transformed?: number | null;
   created_by?: string;
   task_order_mode?: "date" | "manual";
   creator?: DbProfile | DbProfile[] | null; project_members?: DbMember[]; tasks?: DbTaskCount[];
@@ -85,6 +86,9 @@ function mapProject(row: DbProject): Project {
     milestonesDone: milestones.filter((task) => task.status === "done").length, milestonesTotal: milestones.length,
     blockedTasks: projectTasks.filter((task) => task.status === "blocked").length,
     taskOrderMode: row.task_order_mode ?? "date",
+    capturableName: row.capturable_name ?? undefined,
+    capturableReductionPercent: row.capturable_reduction_percent == null ? undefined : Number(row.capturable_reduction_percent),
+    hhtTransformed: row.hht_transformed == null ? undefined : Number(row.hht_transformed),
   };
 }
 

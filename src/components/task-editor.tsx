@@ -149,6 +149,10 @@ export function TaskEditor({ task, allTasks, sections, members, canEdit, project
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!canEdit) return;
+    if (activePanel === "subtasks" && subtaskTitle.trim()) {
+      const childCreated = await createChild();
+      if (!childCreated) return;
+    }
     setBusy(true); setError("");
     const finalProgress = status === "done" ? 100 : progress;
     const effectiveActualDate = actualCompletionDate;
@@ -246,10 +250,14 @@ export function TaskEditor({ task, allTasks, sections, members, canEdit, project
     setBusy(false);
   };
 
-  const createChild = async () => {
+  const createChild = async (): Promise<boolean> => {
     const parent = allTasks.find((item) => item.id === subtaskParent) || task;
     const cleanTitle = subtaskTitle.trim();
-    if (!cleanTitle || !canEdit) return;
+    if (!cleanTitle || !canEdit) return false;
+    if (subtaskOwner === "__manual__" && !subtaskManualOwner.trim()) {
+      setError("Escribe el nombre del responsable o selecciona Sin asignar.");
+      return false;
+    }
     setBusy(true); setError("");
     let newId = `local-${Date.now()}`;
     let childDirectoryId: string | null = null;
@@ -261,7 +269,7 @@ export function TaskEditor({ task, allTasks, sections, members, canEdit, project
         task_due: subtaskDue || null, target_assignee: subtaskOwner && subtaskOwner !== "__manual__" && !subtaskOwner.startsWith("external:") ? subtaskOwner : null,
         assignee_label: externalLabel || null,
       });
-      if (childError) { setError(childError.code === "PGRST202" ? "Falta aplicar la migración 202607140007_subtasks_followups.sql." : childError.message); setBusy(false); return; }
+      if (childError) { setError(childError.code === "PGRST202" ? "Falta aplicar la migración 202607140007_subtasks_followups.sql." : childError.message); setBusy(false); return false; }
       newId = String(data);
       if (subtaskOwner === "__manual__" && subtaskManualOwner.trim()) {
         const remembered = await createClient()!.rpc("remember_external_assignee", { target_project: task.projectId, assignee_name: subtaskManualOwner.trim() });
@@ -279,6 +287,7 @@ export function TaskEditor({ task, allTasks, sections, members, canEdit, project
     if (childDirectoryId) childOwner.directoryId = childDirectoryId;
     onCreated({ id: newId, projectId: task.projectId, parentId: parent.id, title: cleanTitle, description: "", section: parent.section, owner: childOwner, owners: childOwner.id === "unassigned" ? [] : [childOwner], assigneeId: member?.user_id, assigneeIds: member ? [member.user_id] : [], directoryAssigneeIds: childDirectoryId ? [childDirectoryId] : [], manualAssignee: externalName, start: 1, duration: Math.max(1, differenceInCalendarDays(due, start) + 1), progress: 0, priority: parent.priority || 2, status: "todo", due: subtaskDue ? format(due, "dd MMM", { locale: es }) : "Sin fecha", startDate: subtaskStart, dueDate: subtaskDue, color: parent.color || "#2f7669", rollupProgress: false });
     setSubtaskTitle(""); setSubtaskManualOwner(""); setBusy(false); await loadContext();
+    return true;
   };
 
   return <ModalPortal><div className="modal-layer task-editor-layer" role="dialog" aria-modal="true" aria-label={`Editar ${task.title}`}>
@@ -313,7 +322,7 @@ export function TaskEditor({ task, allTasks, sections, members, canEdit, project
             <div className="editor-panel-intro"><span className="eyebrow">DESGLOSE</span><h3>Desglose de {task.title}</h3><p>Puedes crear hasta tres niveles bajo una tarea principal. Cada nivel puede resumir automáticamente el avance de sus hijos.</p></div>
             <label className="rollup-choice"><span><b>Calcular avance desde subtareas</b><small>El porcentaje de esta tarea será el promedio de sus hijas directas.</small></span><input type="checkbox" checked={rollupEnabled} onChange={(event) => toggleRollup(event.target.checked)} disabled={!canEdit || busy} /><i /></label>
             <div className="subtask-tree">{descendants.map((child) => <div key={child.id} className="subtask-branch"><button type="button" style={{ paddingLeft: `${13 + Math.max(0, taskDepth(child, allTasks) - currentDepth - 1) * 22}px` }} onClick={() => onSelectTask(child)}><span className="tree-line"><i style={{ background: child.color }} /></span><div><b>{child.title}</b><small>{child.startDate || "Sin inicio"} · {child.owner.name}</small></div><span className="tree-progress"><i style={{ width: `${child.progress}%`, background: child.color }} /><b>{child.progress}%</b></span></button></div>)}{!directChildren.length && <div className="subtask-empty"><ListTree size={22} /><b>Sin desglose todavía</b><span>Divide esta actividad cuando necesites un seguimiento más preciso.</span></div>}</div>
-            {canEdit && allowedParents.length > 0 && <div className="subtask-create"><h4>Agregar tarea anidada</h4>{allowedParents.length > 1 && <label className="field-label">Ubicar dentro de<select value={subtaskParent} onChange={(event) => setSubtaskParent(event.target.value)}>{allowedParents.map((item) => <option value={item.id} key={item.id}>{`${"↳ ".repeat(Math.max(1, taskDepth(item, allTasks) - currentDepth + 1))}${item.title}`}</option>)}</select></label>}<label className="field-label">Nombre<input value={subtaskTitle} onChange={(event) => setSubtaskTitle(event.target.value)} placeholder="Ej. Validar planos del proveedor" required /></label><div className="form-grid"><label className="field-label">Inicio<input type="date" value={subtaskStart} onChange={(event) => setSubtaskStart(event.target.value)} /></label><label className="field-label">Término<input type="date" value={subtaskDue} onChange={(event) => setSubtaskDue(event.target.value)} /></label></div><label className="field-label">Responsable<select value={subtaskOwner} onChange={(event) => setSubtaskOwner(event.target.value)}><option value="">Sin asignar</option>{members.map((member) => <option value={member.user_id} key={member.user_id}>{member.full_name || member.email}</option>)}<option value="__manual__">Nombre externo o ficticio</option></select></label>{subtaskOwner === "__manual__" && <label className="field-label">Nombre<input value={subtaskManualOwner} onChange={(event) => setSubtaskManualOwner(event.target.value)} required /></label>}<button type="button" className="button secondary" onClick={createChild} disabled={busy || !subtaskTitle.trim()}><Plus size={15} /> Crear tarea anidada</button></div>}
+            {canEdit && allowedParents.length > 0 && <div className="subtask-create"><h4>Agregar tarea anidada</h4>{allowedParents.length > 1 && <label className="field-label">Ubicar dentro de<select value={subtaskParent} onChange={(event) => setSubtaskParent(event.target.value)}>{allowedParents.map((item) => <option value={item.id} key={item.id}>{`${"↳ ".repeat(Math.max(1, taskDepth(item, allTasks) - currentDepth + 1))}${item.title}`}</option>)}</select></label>}<label className="field-label">Nombre<input value={subtaskTitle} onChange={(event) => setSubtaskTitle(event.target.value)} placeholder="Ej. Validar planos del proveedor" /></label><div className="form-grid"><label className="field-label">Inicio<input type="date" value={subtaskStart} onChange={(event) => setSubtaskStart(event.target.value)} /></label><label className="field-label">Término<input type="date" value={subtaskDue} onChange={(event) => setSubtaskDue(event.target.value)} /></label></div><label className="field-label">Responsable<select value={subtaskOwner} onChange={(event) => setSubtaskOwner(event.target.value)}><option value="">Sin asignar</option>{members.map((member) => <option value={member.user_id} key={member.user_id}>{member.full_name || member.email}</option>)}<option value="__manual__">Nombre externo o ficticio</option></select></label>{subtaskOwner === "__manual__" && <label className="field-label">Nombre<input value={subtaskManualOwner} onChange={(event) => setSubtaskManualOwner(event.target.value)} /></label>}<button type="button" className="button secondary" onClick={createChild} disabled={busy || !subtaskTitle.trim()}><Plus size={15} /> Crear tarea anidada</button><small className="subtask-save-hint">También se creará si presionas Guardar con un nombre escrito.</small></div>}
             {currentDepth >= 3 && <div className="depth-limit-note"><ListTree size={16} /> Este es el último nivel permitido de la jerarquía.</div>}
           </div>}
 
@@ -326,7 +335,7 @@ export function TaskEditor({ task, allTasks, sections, members, canEdit, project
           {activePanel === "notes" && <div className="private-note-panel"><span className="private-note-icon"><UserRound size={20} /></span><div><span className="eyebrow">ESPACIO PERSONAL</span><h3>Apuntes privados</h3><p>Solo tú puedes leer este contenido. No aparecerá en exportaciones ni en la actividad del equipo.</p></div><label className="field-label"><textarea value={privateNote} onChange={(event) => setPrivateNote(event.target.value)} rows={12} placeholder="Decisiones pendientes, recordatorios, contexto para la próxima reunión…" /></label></div>}
           {error && <p className="form-error task-editor-error">{error}</p>}
         </div>
-        <footer className="task-editor-actions">{canEdit && <button type="button" className="button danger-outline" onClick={removeTask} disabled={busy}><Trash2 size={15} /> Eliminar</button>}<span /><button type="button" className="button secondary" onClick={onClose}>Cerrar</button>{canEdit && <button className="button primary" disabled={busy}><Save size={15} /> {busy ? "Guardando…" : "Guardar"}</button>}</footer>
+        <footer className="task-editor-actions">{canEdit && <button type="button" className="button danger-outline" onClick={removeTask} disabled={busy}><Trash2 size={15} /> Eliminar</button>}<span /><button type="button" className="button secondary" onClick={onClose}>Cerrar</button>{canEdit && <button className="button primary" disabled={busy}><Save size={15} /> {busy ? "Guardando…" : activePanel === "subtasks" && subtaskTitle.trim() ? "Guardar tarea y desglose" : "Guardar"}</button>}</footer>
       </form>
     </section>
   </div></ModalPortal>;

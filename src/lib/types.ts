@@ -37,6 +37,9 @@ export type Project = {
   visibilityKey: "workspace" | "shared" | "private";
   showToLeader?: boolean;
   taskOrderMode?: "date" | "manual";
+  capturableName?: string;
+  capturableReductionPercent?: number;
+  hhtTransformed?: number;
 };
 
 export type Task = {

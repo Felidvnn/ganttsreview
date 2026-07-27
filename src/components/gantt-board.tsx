@@ -2,7 +2,7 @@
 
 import {
   AlertTriangle, CalendarRange, Check, ChevronDown, ChevronLeft, ChevronRight, CornerDownRight,
-  Columns3, CopyPlus, Link2, Maximize2, Minimize2, Plus, Presentation, StickyNote, Trash2, X,
+  Columns3, CopyPlus, Filter, Link2, Maximize2, Minimize2, Plus, Presentation, StickyNote, Trash2, X,
 } from "lucide-react";
 import { addDays, differenceInCalendarDays, format, startOfWeek } from "date-fns";
 import { es } from "date-fns/locale";
@@ -12,6 +12,7 @@ import type { Person, Task, TaskStatus } from "@/lib/types";
 import { defaultProjectStatuses, type ProjectTaskStatus } from "@/lib/task-statuses";
 import { defaultProjectTaskTypes, taskTypeLabel, type ProjectTaskType } from "@/lib/task-types";
 import { taskDisplayColor, type TaskColorMode } from "@/lib/task-colors";
+import { taskDurationDays, taskOverdueDays } from "@/lib/task-filters";
 import { sortTasksByDate, sortTasksManual, taskDepth, taskDisplaySection } from "@/lib/task-order";
 import { createClient, hasSupabaseConfig } from "@/lib/supabase/client";
 import { Avatar } from "./avatar";
@@ -19,13 +20,13 @@ import { TaskBadge } from "./status";
 
 type AssignableMember = { user_id: string; full_name: string; email: string };
 type DragState = { taskId: string; startX: number; startY: number; width: number; start: Date; due: Date; deltaDays: number; previous: Task[] };
-type ColumnKey = "task" | "taskType" | "owner" | "status" | "priority" | "progress" | "startDate" | "dueDate" | "actualDate";
+type ColumnKey = "task" | "taskType" | "owner" | "status" | "priority" | "progress" | "startDate" | "dueDate" | "duration" | "actualDate";
 type ColumnResizeState = { column: ColumnKey; startX: number; startWidth: number; min: number; max: number; scale: number };
 type AssigneePopoverPosition = { left: number; top?: number; bottom?: number; maxHeight: number; placement: "top" | "bottom" };
 
 const colors = ["#2f7669", "#3778a6", "#7f5aa6", "#c07a32", "#b64e4e", "#68766f"];
-const defaultColumnWidths: Record<ColumnKey, number> = { task: 235, taskType: 96, owner: 130, status: 90, priority: 78, progress: 70, startDate: 104, dueDate: 104, actualDate: 104 };
-const defaultVisibleColumns: Record<ColumnKey, boolean> = { task: true, taskType: true, owner: true, status: true, priority: true, progress: true, startDate: true, dueDate: true, actualDate: true };
+const defaultColumnWidths: Record<ColumnKey, number> = { task: 235, taskType: 96, owner: 130, status: 90, priority: 78, progress: 70, startDate: 104, dueDate: 104, duration: 64, actualDate: 104 };
+const defaultVisibleColumns: Record<ColumnKey, boolean> = { task: true, taskType: true, owner: true, status: true, priority: true, progress: true, startDate: true, dueDate: true, duration: true, actualDate: true };
 function dateValue(date: Date) { return format(date, "yyyy-MM-dd"); }
 function initials(name: string) { return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "—"; }
 function memberPerson(member: AssignableMember): Person {
@@ -33,7 +34,7 @@ function memberPerson(member: AssignableMember): Person {
 }
 const unassigned: Person = { id: "unassigned", name: "Sin asignar", initials: "—", role: "Ingeniero", color: "#98a6a0" };
 
-export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = false, colorMode = "manual", projectStatuses = defaultProjectStatuses, projectTaskTypes = defaultProjectTaskTypes, taskOrderMode = "date", sectionOrder = [], onTasksChange, onOpenTask }: { initialTasks: Task[]; projectId: string; timelineStart?: string; readOnly?: boolean; colorMode?: TaskColorMode; projectStatuses?: ProjectTaskStatus[]; projectTaskTypes?: ProjectTaskType[]; taskOrderMode?: "date" | "manual"; sectionOrder?: string[]; onTasksChange?: (tasks: Task[]) => void; onOpenTask?: (task: Task) => void }) {
+export function GanttBoard({ initialTasks, visibleTaskIds, filtersActive = false, projectId, timelineStart, readOnly = false, colorMode = "manual", projectStatuses = defaultProjectStatuses, projectTaskTypes = defaultProjectTaskTypes, taskOrderMode = "date", sectionOrder = [], onTasksChange, onOpenTask }: { initialTasks: Task[]; visibleTaskIds?: string[]; filtersActive?: boolean; projectId: string; timelineStart?: string; readOnly?: boolean; colorMode?: TaskColorMode; projectStatuses?: ProjectTaskStatus[]; projectTaskTypes?: ProjectTaskType[]; taskOrderMode?: "date" | "manual"; sectionOrder?: string[]; onTasksChange?: (tasks: Task[]) => void; onOpenTask?: (task: Task) => void }) {
   const projectBase = useMemo(() => timelineStart ? new Date(`${timelineStart}T12:00:00`) : new Date(), [timelineStart]);
   const [items, setItems] = useState<Task[]>(() => initialTasks.map((task) => {
     const start = task.startDate ? new Date(`${task.startDate}T12:00:00`) : addDays(projectBase, task.start - 1);
@@ -97,19 +98,26 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   const todayKey = dateValue(new Date());
   const todayOffset = differenceInCalendarDays(new Date(), windowStart);
   const orderedItems = useMemo(() => taskOrderMode === "manual" ? sortTasksManual(items) : sortTasksByDate(items), [items, taskOrderMode]);
+  const displayTaskSet = useMemo(() => visibleTaskIds ? new Set(visibleTaskIds) : null, [visibleTaskIds]);
+  const displayOrderedItems = useMemo(
+    () => displayTaskSet ? orderedItems.filter((task) => displayTaskSet.has(task.id)) : orderedItems,
+    [displayTaskSet, orderedItems],
+  );
   const sections = useMemo(() => Array.from(new Set([...sectionOrder, ...sectionOptions, ...items.map((item) => taskDisplaySection(item, items))])), [items, sectionOptions, sectionOrder]);
-  const hasChildren = (task: Task) => items.some((item) => item.parentId === task.id);
+  const hasChildren = (task: Task) => displayOrderedItems.some((item) => item.parentId === task.id);
   const isHiddenByParent = (task: Task) => {
     let parentId = task.parentId; const visited = new Set<string>();
     while (parentId && !visited.has(parentId)) {
+      if (displayTaskSet && !displayTaskSet.has(parentId)) break;
       if (collapsedParents.includes(parentId)) return true;
       visited.add(parentId); parentId = items.find((item) => item.id === parentId)?.parentId;
     }
     return false;
   };
-  const allTasksInSection = (section: string) => orderedItems.filter((item) => taskDisplaySection(item, items) === section);
+  const allTasksInSection = (section: string) => displayOrderedItems.filter((item) => taskDisplaySection(item, items) === section);
   const tasksInSection = (section: string) => allTasksInSection(section).filter((item) => !isHiddenByParent(item));
-  const visible = orderedItems.filter((task) => !collapsed.includes(taskDisplaySection(task, items)) && !isHiddenByParent(task));
+  const visible = displayOrderedItems.filter((task) => !collapsed.includes(taskDisplaySection(task, items)) && !isHiddenByParent(task));
+  const displaySections = sections.filter((section) => allTasksInSection(section).length > 0);
   const allVisibleSelected = visible.length > 0 && visible.every((task) => selectedTasks.includes(task.id));
   const activeStatuses = useMemo(() => projectStatuses.filter((item) => item.enabled).sort((left, right) => left.sortOrder - right.sortOrder), [projectStatuses]);
   const statuses = useMemo(() => activeStatuses.map((item) => ({ value: item.status, label: item.label })), [activeStatuses]);
@@ -763,7 +771,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   const actualDelayOffset = (task: Task) => task.dueDate ? differenceInCalendarDays(new Date(`${task.dueDate}T12:00:00`), windowStart) + 1 : 0;
   const actualDelayWidth = (task: Task) => task.dueDate && task.actualCompletionDate ? Math.max(0, differenceInCalendarDays(new Date(`${task.actualCompletionDate}T12:00:00`), new Date(`${task.dueDate}T12:00:00`))) : 0;
   const dayLabelEvery = rangeDays <= 30 ? 1 : rangeDays <= 60 ? 2 : rangeDays <= 90 ? 3 : 7;
-  const visibleColumnOrder: ColumnKey[] = ["task", "taskType", "owner", "status", "priority", "progress", "startDate", "dueDate", "actualDate"];
+  const visibleColumnOrder: ColumnKey[] = ["task", "taskType", "owner", "status", "priority", "progress", "startDate", "dueDate", "duration", "actualDate"];
   const gridTemplateColumns = `${visibleColumnOrder.filter((column) => visibleColumns[column]).map((column) => `${columnWidths[column]}px`).join(" ")} minmax(565px, 1fr)`;
   const informationWidth = visibleColumnOrder.filter((column) => visibleColumns[column]).reduce((sum, column) => sum + columnWidths[column], 0);
   const informationColumnCount = visibleColumnOrder.filter((column) => visibleColumns[column]).length;
@@ -771,7 +779,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
   const prettyDate = (value?: string) => value ? format(new Date(`${value}T12:00:00`), "dd MMM yy", { locale: es }) : "Sin fecha";
   const columnOptions: { key: ColumnKey; label: string }[] = [
     { key: "taskType", label: "Tipo de tarea" }, { key: "owner", label: "Responsable" }, { key: "status", label: "Estado" }, { key: "priority", label: "Prioridad" },
-    { key: "progress", label: "Avance" }, { key: "startDate", label: "Fecha de inicio" }, { key: "dueDate", label: "Fecha de fin" }, { key: "actualDate", label: "Fecha real" },
+    { key: "progress", label: "Avance" }, { key: "startDate", label: "Fecha de inicio" }, { key: "dueDate", label: "Fecha de fin" }, { key: "duration", label: "Duración" }, { key: "actualDate", label: "Fecha real" },
   ];
   const assigneeEditorTask = assigneeEditorTaskId ? items.find((task) => task.id === assigneeEditorTaskId) : undefined;
   const assigneeEditorUserIds = assigneeEditorTask?.assigneeIds || (assigneeEditorTask?.assigneeId ? [assigneeEditorTask.assigneeId] : []);
@@ -797,7 +805,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
               <div className="gantt-days" style={{ gridTemplateColumns: `repeat(${rangeDays}, 1fr)` }}>{timelineDays.map((day, index) => <span className={dateValue(day) === todayKey ? "today" : ""} key={day.toISOString()}>{index % dayLabelEvery === 0 ? format(day, "d") : ""}</span>)}</div>
             </div>
           </div>
-          {sections.filter((section) => allTasksInSection(section).length > 0).map((section) => <section className="gantt-simple-section" key={section}>
+          {displaySections.map((section) => <section className="gantt-simple-section" key={section}>
             <header><b>{section}</b><span>{allTasksInSection(section).length} actividades</span></header>
             {allTasksInSection(section).map((task) => {
               const depth = taskDepth(task, items);
@@ -818,14 +826,14 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
               </div>;
             })}
           </section>)}
-          {!items.length && <div className="gantt-empty"><Check size={18} /><b>Aún no hay tareas</b><span>Agrega planificación para preparar esta vista de presentación.</span></div>}
+          {!displayOrderedItems.length && <div className="gantt-empty"><Check size={18} /><b>Sin tareas visibles</b><span>{filtersActive ? "No hay tareas que coincidan con los filtros actuales." : "Agrega planificación para preparar esta vista de presentación."}</span></div>}
         </div>
       </div>}
       {!simpleView && <div className="gantt-desktop" style={{ "--day-size": `${100 / rangeDays}%`, "--segment-count": timelineSegments.length, minWidth: `${informationWidth + 565}px` } as React.CSSProperties} onWheel={navigateWheel}>
-        <div className="gantt-grid gantt-header-row" style={gridStyle}><div className="gantt-task-head">TAREA{columnResizer("task", 180, 430)}</div>{visibleColumns.taskType && <div className="gantt-type-head">TIPO{columnResizer("taskType", 78, 180)}</div>}{visibleColumns.owner && <div className="gantt-owner-head">RESPONSABLES{columnResizer("owner", 90, 260)}</div>}{visibleColumns.status && <div className="gantt-status-head">ESTADO{columnResizer("status", 75, 180)}</div>}{visibleColumns.priority && <div className="gantt-priority-head">PRIORIDAD{columnResizer("priority", 65, 140)}</div>}{visibleColumns.progress && <div className="gantt-progress-head">AVANCE{columnResizer("progress", 65, 150)}</div>}{visibleColumns.startDate && <div className="gantt-date-head">INICIO{columnResizer("startDate", 88, 170)}</div>}{visibleColumns.dueDate && <div className="gantt-date-head">FIN{columnResizer("dueDate", 88, 170)}</div>}{visibleColumns.actualDate && <div className="gantt-date-head actual">REAL{columnResizer("actualDate", 88, 170)}</div>}<div className="gantt-timeline-head"><div className="gantt-weeks" style={{ gridTemplateColumns: `repeat(${timelineSegments.length}, 1fr)` }}>{timelineSegments.map((segment, index) => <span key={`${segment}-${index}`}>{segment}</span>)}</div><div className="gantt-days" style={{ gridTemplateColumns: `repeat(${rangeDays}, 1fr)` }}>{timelineDays.map((day, index) => <span className={dateValue(day) === todayKey ? "today" : ""} key={day.toISOString()}>{index % dayLabelEvery === 0 ? format(day, "d") : ""}</span>)}</div></div></div>
+        <div className="gantt-grid gantt-header-row" style={gridStyle}><div className="gantt-task-head">TAREA{columnResizer("task", 180, 430)}</div>{visibleColumns.taskType && <div className="gantt-type-head">TIPO{columnResizer("taskType", 78, 180)}</div>}{visibleColumns.owner && <div className="gantt-owner-head">RESPONSABLES{columnResizer("owner", 90, 260)}</div>}{visibleColumns.status && <div className="gantt-status-head">ESTADO{columnResizer("status", 75, 180)}</div>}{visibleColumns.priority && <div className="gantt-priority-head">PRIORIDAD{columnResizer("priority", 65, 140)}</div>}{visibleColumns.progress && <div className="gantt-progress-head">AVANCE{columnResizer("progress", 65, 150)}</div>}{visibleColumns.startDate && <div className="gantt-date-head">INICIO{columnResizer("startDate", 88, 170)}</div>}{visibleColumns.dueDate && <div className="gantt-date-head">FIN{columnResizer("dueDate", 88, 170)}</div>}{visibleColumns.duration && <div className="gantt-duration-head">DÍAS{columnResizer("duration", 52, 100)}</div>}{visibleColumns.actualDate && <div className="gantt-date-head actual">REAL{columnResizer("actualDate", 88, 170)}</div>}<div className="gantt-timeline-head"><div className="gantt-weeks" style={{ gridTemplateColumns: `repeat(${timelineSegments.length}, 1fr)` }}>{timelineSegments.map((segment, index) => <span key={`${segment}-${index}`}>{segment}</span>)}</div><div className="gantt-days" style={{ gridTemplateColumns: `repeat(${rangeDays}, 1fr)` }}>{timelineDays.map((day, index) => <span className={dateValue(day) === todayKey ? "today" : ""} key={day.toISOString()}>{index % dayLabelEvery === 0 ? format(day, "d") : ""}</span>)}</div></div></div>
         <div className="gantt-body">
           {todayOffset >= 0 && todayOffset < rangeDays && <div className="today-line" style={{ left: `calc(${informationWidth}px + (100% - ${informationWidth}px) * ${todayOffset / rangeDays})` }} />}
-          {sections.map((section) => (
+          {displaySections.map((section) => (
             <div key={section} className="gantt-section-wrap">
               <button data-section-drop={section} className={`gantt-section ${hierarchyDrag ? "hierarchy-drop-section" : ""} ${hierarchyTarget === `section:${section}` ? "drop-active" : ""}`} onClick={() => setCollapsed((state) => state.includes(section) ? state.filter((name) => name !== section) : [...state, section])} onDragOver={(event) => { if (!hierarchyDrag) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setHierarchyTarget(`section:${section}`); }} onDragLeave={() => setHierarchyTarget((current) => current === `section:${section}` ? null : current)} onDrop={async (event) => { event.preventDefault(); event.stopPropagation(); const taskId = hierarchyDrag || event.dataTransfer.getData("text/plain"); if (!taskId) return; if (selectionMode && selectedTasks.includes(taskId)) await moveSelectedHierarchy(null, section); else await moveHierarchy(taskId, null, section); }}>
                 {collapsed.includes(section) ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
@@ -838,12 +846,13 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
                 const statusColor = projectStatuses.find((item) => item.status === task.status)?.color || "#68766f";
                 const taskOwners = task.owners?.length ? task.owners : [task.owner];
                 const scheduleInvalid = Boolean(task.startDate && task.dueDate && task.dueDate < task.startDate);
+                const overdueDays = taskOverdueDays(task);
                 const selectedType = projectTaskTypes.find((item) => item.id === task.taskTypeId);
-                return <div data-task-drop={task.id} className={`gantt-grid gantt-task-row ${scheduleInvalid ? "schedule-invalid" : ""} ${hierarchyTarget === task.id ? "hierarchy-drop-target" : ""} ${hierarchyDrag === task.id ? "hierarchy-dragging" : ""} ${hierarchyDrag && selectionMode && selectedTasks.includes(task.id) ? "hierarchy-selection-dragging" : ""} ${assigneeEditorTaskId === task.id ? "assignee-row-editing" : ""}`} key={task.id} style={gridStyle} onDragOver={(event) => { if (!hierarchyDrag || hierarchyDrag === task.id) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setHierarchyTarget(task.id); }} onDragLeave={() => setHierarchyTarget((current) => current === task.id ? null : current)} onDrop={(event) => dropOnTask(event, task.id)}>
+                return <div data-task-drop={task.id} className={`gantt-grid gantt-task-row ${scheduleInvalid ? "schedule-invalid" : ""} ${overdueDays ? "task-overdue" : ""} ${hierarchyTarget === task.id ? "hierarchy-drop-target" : ""} ${hierarchyDrag === task.id ? "hierarchy-dragging" : ""} ${hierarchyDrag && selectionMode && selectedTasks.includes(task.id) ? "hierarchy-selection-dragging" : ""} ${assigneeEditorTaskId === task.id ? "assignee-row-editing" : ""}`} key={task.id} style={gridStyle} onDragOver={(event) => { if (!hierarchyDrag || hierarchyDrag === task.id) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setHierarchyTarget(task.id); }} onDragLeave={() => setHierarchyTarget((current) => current === task.id ? null : current)} onDrop={(event) => dropOnTask(event, task.id)}>
                   <div className={`gantt-task-name task-depth-${depth}`} draggable={!readOnly && (!selectionMode || selectedTasks.includes(task.id)) && bulkBusy !== "move"} onDragStart={(event) => startHierarchyDrag(event, task.id)} onDragEnd={() => { stopDragAutoScroll(); setHierarchyDrag(null); setHierarchyTarget(null); }} title={selectionMode ? selectedTasks.includes(task.id) ? "Arrastra para mover todas las tareas seleccionadas" : "Selecciona esta tarea para incluirla" : readOnly ? undefined : "Arrastra para anidarla o moverla a una sección"}>
                     {selectionMode ? <button className={`task-selection-check ${selectedTasks.includes(task.id) ? "selected" : ""}`} onClick={() => toggleTaskSelection(task.id)} title="Seleccionar tarea">{selectedTasks.includes(task.id) && <Check size={12} />}</button> : <button className={`tiny-check ${task.status === "done" ? "checked" : ""}`} disabled={readOnly} onClick={() => updatePresentation(task.id, task.status === "done" ? "todo" : "done", task.color || colors[0])} title={readOnly ? "Estado visible en modo de consulta" : "Marcar como completada"}>{task.status === "done" && <Check size={12} />}</button>}
                     <span className="task-tree-control">{taskHasChildren ? <button type="button" className={`hierarchy-toggle ${depth > 0 ? "hierarchy-branch" : "hierarchy-root"} ${collapsedParents.includes(task.id) ? "collapsed" : ""}`} onClick={() => setCollapsedParents((current) => current.includes(task.id) ? current.filter((id) => id !== task.id) : [...current, task.id])} title={collapsedParents.includes(task.id) ? "Mostrar subtareas" : "Ocultar subtareas"} aria-label={collapsedParents.includes(task.id) ? "Mostrar subtareas" : "Ocultar subtareas"}>{depth > 0 ? <CornerDownRight size={13} /> : <span className="root-chevron" />}</button> : depth > 0 ? <CornerDownRight className="subtask-arrow" size={13} /> : <span className="hierarchy-spacer" />}</span>
-                    <span><span className="task-title-line"><button type="button" className="task-open-button" onClick={() => openTask(task)}>{task.title}</button>{task.hasPrivateNote && <StickyNote className="task-note-marker" size={11} aria-label="Tienes apuntes privados" />}</span>{task.isMilestone && <small>Hito</small>}</span>
+                    <span><span className="task-title-line"><button type="button" className="task-open-button" onClick={() => openTask(task)}>{task.title}</button>{task.hasPrivateNote && <StickyNote className="task-note-marker" size={11} aria-label="Tienes apuntes privados" />}</span>{task.isMilestone && <small>Hito</small>}{overdueDays > 0 && <small className="task-overdue-badge"><AlertTriangle size={9} /> Atrasada · {overdueDays} d</small>}</span>
                     {!readOnly && !selectionMode && <button type="button" className="task-duplicate-button" onClick={() => duplicateTask(task)} title="Duplicar tarea"><CopyPlus size={13} /></button>}
                     {!readOnly && colorMode === "manual" && <input className="task-color-input" type="color" value={task.color || colors[0]} onChange={(event) => setItems((current) => current.map((item) => item.id === task.id ? { ...item, color: event.target.value } : item))} onBlur={(event) => updatePresentation(task.id, task.status, event.target.value)} title="Color de la tarea" />}
                   </div>
@@ -855,7 +864,8 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
                   {visibleColumns.priority && <div className="gantt-priority">{readOnly ? <span className={`priority-value priority-${priorityLabel.toLowerCase()}`}>{priorityLabel}</span> : <select className={`priority-select priority-${priorityLabel.toLowerCase()}`} value={task.priority || 2} onChange={(event) => updatePriority(task.id, Number(event.target.value) as 1 | 2 | 3)} aria-label={`Prioridad de ${task.title}`}><option value={1}>Baja</option><option value={2}>Media</option><option value={3}>Alta</option></select>}</div>}
                   {visibleColumns.progress && <div className="gantt-progress-cell" title={task.rollupProgress ? "Calculado desde subtareas" : undefined}>{readOnly || task.rollupProgress ? <div className="gantt-progress-read"><span><i style={{ width: `${task.progress}%`, background: taskDisplayColor(task, colorMode) }} /></span><b>{task.progress}%</b></div> : <label className="gantt-progress-control"><span>{task.progress}%</span><input type="range" min="0" max="100" step="5" value={task.progress} onChange={(event) => setItems((current) => current.map((item) => item.id === task.id ? { ...item, progress: Number(event.target.value) } : item))} onPointerUp={(event) => updateProgress(task.id, Number(event.currentTarget.value))} onKeyUp={(event) => updateProgress(task.id, Number(event.currentTarget.value))} onBlur={(event) => updateProgress(task.id, Number(event.currentTarget.value))} aria-label={`Avance de ${task.title}`} /></label>}</div>}
                   {visibleColumns.startDate && <div className={`gantt-date-cell ${scheduleInvalid ? "schedule-invalid-cell" : ""}`} title={scheduleInvalid ? "El inicio es posterior al fin. Puedes seguir editando." : undefined}>{readOnly ? prettyDate(task.startDate) : <input type="date" value={task.startDate || ""} onChange={(event) => updateInlineDate(task, "startDate", event.target.value)} aria-label={`Inicio de ${task.title}`} />}</div>}
-                  {visibleColumns.dueDate && <div className={`gantt-date-cell ${task.overdue ? "overdue" : ""} ${scheduleInvalid ? "schedule-invalid-cell" : ""}`} title={scheduleInvalid ? "El fin es anterior al inicio. Puedes seguir editando." : undefined}>{readOnly ? prettyDate(task.dueDate) : <input type="date" value={task.dueDate || ""} onChange={(event) => updateInlineDate(task, "dueDate", event.target.value)} aria-label={`Fin de ${task.title}`} />}</div>}
+                  {visibleColumns.dueDate && <div className={`gantt-date-cell ${overdueDays ? "overdue" : ""} ${scheduleInvalid ? "schedule-invalid-cell" : ""}`} title={scheduleInvalid ? "El fin es anterior al inicio. Puedes seguir editando." : overdueDays ? `${overdueDays} días de atraso` : undefined}>{readOnly ? prettyDate(task.dueDate) : <input type="date" value={task.dueDate || ""} onChange={(event) => updateInlineDate(task, "dueDate", event.target.value)} aria-label={`Fin de ${task.title}`} />}</div>}
+                  {visibleColumns.duration && <div className="gantt-duration-cell" title="Días calendario, incluyendo inicio y fin"><b>{taskDurationDays(task)}</b><span>d</span></div>}
                   {visibleColumns.actualDate && <div className={`gantt-date-cell actual ${task.actualCompletionDate && task.dueDate && task.actualCompletionDate > task.dueDate ? "late" : ""}`}>{readOnly ? prettyDate(task.actualCompletionDate) : <input type="date" value={task.actualCompletionDate || ""} onChange={(event) => updateInlineDate(task, "actualCompletionDate", event.target.value)} aria-label={`Fecha real de ${task.title}`} />}</div>}
                   <div className="gantt-timeline">{actualDelayWidth(task) > 0 && <span className="gantt-actual-delay" style={{ left: `${actualDelayOffset(task) / rangeDays * 100}%`, width: `${actualDelayWidth(task) / rangeDays * 100}%` }} title={`${actualDelayWidth(task)} días de atraso real`} />}<div className={`gantt-bar bar-${task.status} ${task.isMilestone ? "gantt-milestone" : ""} ${dragRef.current?.taskId === task.id ? "dragging" : ""}`} style={{ left: `${taskOffset(task) / rangeDays * 100}%`, width: task.isMilestone ? "18px" : `${taskWidth(task) / rangeDays * 100}%`, "--task-color": taskDisplayColor(task, colorMode) } as React.CSSProperties} title={`${task.title} · clic para abrir · arrastra para cambiar fechas`} onPointerDown={(event) => startDrag(event, task)} onPointerMove={moveDrag} onPointerUp={endDrag}><i style={{ width: `${task.progress}%` }} /><span>{task.isMilestone ? "" : task.progress > 0 ? `${task.progress}%` : ""}</span>{task.status === "blocked" && <AlertTriangle size={13} />}</div></div>
                 </div>;
@@ -870,7 +880,7 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
               </>}
             </div>
           ))}
-          {!items.length && <div className="gantt-empty"><Check size={18} /><b>Aún no hay tareas</b><span>{readOnly ? "Este proyecto todavía no tiene planificación." : "Agrega una tarea o hito dentro de cualquiera de las secciones."}</span></div>}
+          {!displayOrderedItems.length && <div className="gantt-empty"><Filter size={18} /><b>{filtersActive ? "Sin coincidencias" : "Aún no hay tareas"}</b><span>{filtersActive ? "Prueba con otro estado o plazo para volver a mostrar tareas." : readOnly ? "Este proyecto todavía no tiene planificación." : "Agrega una tarea o hito dentro de cualquiera de las secciones."}</span></div>}
         </div>
       </div>}
 
@@ -879,13 +889,14 @@ export function GanttBoard({ initialTasks, projectId, timelineStart, readOnly = 
         {visible.map((task) => {
           const taskHasChildren = hasChildren(task);
           const depth = taskDepth(task, items);
+          const overdueDays = taskOverdueDays(task);
           return <article className={`mobile-task-card mobile-depth-${depth}`} key={task.id} style={{ borderLeftColor: taskDisplayColor(task, colorMode) }}>
             <div>{selectionMode ? <button className={`task-selection-check ${selectedTasks.includes(task.id) ? "selected" : ""}`} onClick={() => toggleTaskSelection(task.id)} title="Seleccionar tarea">{selectedTasks.includes(task.id) && <Check size={12} />}</button> : <button className={`tiny-check ${task.status === "done" ? "checked" : ""}`} disabled={readOnly} onClick={() => updatePresentation(task.id, task.status === "done" ? "todo" : "done", task.color || colors[0])}>{task.status === "done" && <Check size={12} />}</button>}<span className="task-tree-control">{taskHasChildren ? <button type="button" className={`hierarchy-toggle ${depth > 0 ? "hierarchy-branch" : "hierarchy-root"} ${collapsedParents.includes(task.id) ? "collapsed" : ""}`} onClick={() => setCollapsedParents((current) => current.includes(task.id) ? current.filter((id) => id !== task.id) : [...current, task.id])}>{depth > 0 ? <CornerDownRight size={13} /> : <span className="root-chevron" />}</button> : depth > 0 ? <CornerDownRight className="subtask-arrow" size={13} /> : <span className="hierarchy-spacer" />}</span><span><span className="task-title-line"><button type="button" className="task-open-button" onClick={() => selectionMode ? toggleTaskSelection(task.id) : openTask(task)}>{task.title}</button>{task.hasPrivateNote && <StickyNote className="task-note-marker" size={11} aria-label="Tienes apuntes privados" />}</span>{task.isMilestone && <small>Hito</small>}</span><span className="mobile-owner-compact">{task.owner.name}</span></div>
             <div className="mobile-task-progress"><span><i style={{ width: `${task.progress}%`, background: taskDisplayColor(task, colorMode) }} /></span><b>{task.progress}%</b></div>
-            <div className="mobile-task-foot"><span>{task.isMilestone ? <span className="milestone-label">Hito</span> : <TaskBadge status={task.status} label={projectStatuses.find((item) => item.status === task.status)?.label} color={projectStatuses.find((item) => item.status === task.status)?.color} />}</span><i className={`task-priority priority-${task.priority === 3 ? "alta" : task.priority === 1 ? "baja" : "media"}`}>{task.priority === 3 ? "Alta" : task.priority === 1 ? "Baja" : "Media"}</i>{task.blockedBy && <span className="dependency-note"><Link2 size={12} /> {task.blockedBy}</span>}</div>
+            <div className="mobile-task-foot"><span>{task.isMilestone ? <span className="milestone-label">Hito</span> : <TaskBadge status={task.status} label={projectStatuses.find((item) => item.status === task.status)?.label} color={projectStatuses.find((item) => item.status === task.status)?.color} />}</span><i className={`task-priority priority-${task.priority === 3 ? "alta" : task.priority === 1 ? "baja" : "media"}`}>{task.priority === 3 ? "Alta" : task.priority === 1 ? "Baja" : "Media"}</i><span className="mobile-duration">{taskDurationDays(task)} d</span>{overdueDays > 0 && <span className="mobile-overdue"><AlertTriangle size={11} /> {overdueDays} d atraso</span>}{task.blockedBy && <span className="dependency-note"><Link2 size={12} /> {task.blockedBy}</span>}</div>
           </article>;
         })}
-        {!visible.length && <div className="gantt-empty"><Check size={18} /><b>Aún no hay tareas visibles</b><span>{items.length ? "Expande una tarea o sección para ver sus subtareas." : readOnly ? "Este proyecto todavía no tiene planificación." : "Agrega la primera tarea para comenzar."}</span></div>}
+        {!visible.length && <div className="gantt-empty"><Check size={18} /><b>Aún no hay tareas visibles</b><span>{filtersActive ? "No hay tareas que coincidan con los filtros actuales." : items.length ? "Expande una tarea o sección para ver sus subtareas." : readOnly ? "Este proyecto todavía no tiene planificación." : "Agrega la primera tarea para comenzar."}</span></div>}
       </div>}
       {!simpleView && !readOnly && !selectionMode && <button className="gantt-add-bottom" onClick={() => openTaskCreator()}><Plus size={16} /> Agregar tarea/hito</button>}
 
