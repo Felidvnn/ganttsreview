@@ -117,7 +117,9 @@ export function GanttBoard({ initialTasks, visibleTaskIds, filtersActive = false
   const allTasksInSection = (section: string) => displayOrderedItems.filter((item) => taskDisplaySection(item, items) === section);
   const tasksInSection = (section: string) => allTasksInSection(section).filter((item) => !isHiddenByParent(item));
   const visible = displayOrderedItems.filter((task) => !collapsed.includes(taskDisplaySection(task, items)) && !isHiddenByParent(task));
-  const displaySections = sections.filter((section) => allTasksInSection(section).length > 0);
+  // A project section is part of the plan even before it contains tasks.
+  // Keep configured sections visible so users can plan directly inside them.
+  const displaySections = sections;
   const allVisibleSelected = visible.length > 0 && visible.every((task) => selectedTasks.includes(task.id));
   const activeStatuses = useMemo(() => projectStatuses.filter((item) => item.enabled).sort((left, right) => left.sortOrder - right.sortOrder), [projectStatuses]);
   const statuses = useMemo(() => activeStatuses.map((item) => ({ value: item.status, label: item.label })), [activeStatuses]);
@@ -886,7 +888,9 @@ export function GanttBoard({ initialTasks, visibleTaskIds, filtersActive = false
 
       {!simpleView && <div className="gantt-mobile">
         <div className="mobile-timeline-key"><span><i className="key-done" />Completada</span><span><i className="key-progress" />En curso</span><span><i className="key-blocked" />Bloqueada</span></div>
-        {visible.map((task) => {
+        {displaySections.map((section) => <section className="mobile-gantt-section" key={section}>
+          <header className="mobile-gantt-section-head"><span><b>{section}</b><small>{allTasksInSection(section).length} {allTasksInSection(section).length === 1 ? "actividad" : "actividades"}</small></span>{!readOnly && !selectionMode && <button type="button" onClick={() => openTaskCreator(section)}><Plus size={13} /> Agregar</button>}</header>
+          {tasksInSection(section).map((task) => {
           const taskHasChildren = hasChildren(task);
           const depth = taskDepth(task, items);
           const overdueDays = taskOverdueDays(task);
@@ -896,7 +900,9 @@ export function GanttBoard({ initialTasks, visibleTaskIds, filtersActive = false
             <div className="mobile-task-foot"><span>{task.isMilestone ? <span className="milestone-label">Hito</span> : <TaskBadge status={task.status} label={projectStatuses.find((item) => item.status === task.status)?.label} color={projectStatuses.find((item) => item.status === task.status)?.color} />}</span><i className={`task-priority priority-${task.priority === 3 ? "alta" : task.priority === 1 ? "baja" : "media"}`}>{task.priority === 3 ? "Alta" : task.priority === 1 ? "Baja" : "Media"}</i><span className="mobile-duration">{taskDurationDays(task)} d</span>{overdueDays > 0 && <span className="mobile-overdue"><AlertTriangle size={11} /> {overdueDays} d atraso</span>}{task.blockedBy && <span className="dependency-note"><Link2 size={12} /> {task.blockedBy}</span>}</div>
           </article>;
         })}
-        {!visible.length && <div className="gantt-empty"><Check size={18} /><b>Aún no hay tareas visibles</b><span>{filtersActive ? "No hay tareas que coincidan con los filtros actuales." : items.length ? "Expande una tarea o sección para ver sus subtareas." : readOnly ? "Este proyecto todavía no tiene planificación." : "Agrega la primera tarea para comenzar."}</span></div>}
+          {!tasksInSection(section).length && <div className="mobile-gantt-section-empty"><span>{filtersActive && items.some((task) => taskDisplaySection(task, items) === section) ? "Sin coincidencias en esta sección" : "Sección sin tareas"}</span>{!readOnly && !selectionMode && <button type="button" onClick={() => openTaskCreator(section)}><Plus size={12} /> Agregar nueva tarea o hito</button>}</div>}
+        </section>)}
+        {!displaySections.length && <div className="gantt-empty"><Check size={18} /><b>Aún no hay secciones visibles</b><span>{readOnly ? "Este proyecto todavía no tiene una estructura de planificación." : "Agrega una sección para comenzar."}</span></div>}
       </div>}
       {!simpleView && !readOnly && !selectionMode && <button className="gantt-add-bottom" onClick={() => openTaskCreator()}><Plus size={16} /> Agregar tarea/hito</button>}
 

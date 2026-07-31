@@ -159,16 +159,16 @@ export function QuickCreate({ open, onClose }: { open: boolean; onClose: () => v
     try {
       const ExcelJS = await import("exceljs"); const workbook = new ExcelJS.Workbook();
       await workbook.xlsx.load(await file.arrayBuffer() as never);
-      const sheet = workbook.getWorksheet("Tareas") || workbook.worksheets[0]; if (!sheet) throw new Error("El archivo no contiene una hoja de tareas.");
+      const sheet = workbook.getWorksheet("Tareas") || workbook.getWorksheet("Respaldo") || workbook.worksheets[0]; if (!sheet) throw new Error("El archivo no contiene una hoja de tareas o respaldo.");
       const headers = new Map<string, number>(); sheet.getRow(1).eachCell((cell, column) => headers.set(importKey(cell.value), column));
       if (!headers.has("tarea")) throw new Error("La hoja debe conservar la columna Tarea.");
       const value = (row: import("exceljs").Row, header: string) => { const column = headers.get(importKey(header)); return column ? row.getCell(column).value : undefined; };
-      const rows: ImportTaskRow[] = [];
-      sheet.eachRow((row, number) => { if (number === 1) return; const title = String(value(row, "Tarea") ?? "").trim(); if (!title) return;
-        rows.push({ ref: String(value(row, "ID") ?? rows.length + 1).trim(), parentRef: String(value(row, "ID padre") ?? "").trim(), section: String(value(row, "Sección") ?? "General").trim() || "General", title, type: String(value(row, "Tipo") ?? "Tarea").trim() || "Tarea", startDate: importDate(value(row, "Inicio")), dueDate: importDate(value(row, "Fin")), actualDate: importDate(value(row, "Fecha real")), milestone: importedBoolean(value(row, "Hito")), status: importedStatus(value(row, "Estado")), priority: importedPriority(value(row, "Prioridad")), progress: Math.min(100, Math.max(0, Number(value(row, "Avance")) || 0)), owner: String(value(row, "Responsable") ?? "").trim(), description: String(value(row, "Descripción") ?? "").trim() });
+      const rows: ImportTaskRow[] = []; const importedSections = new Set<string>();
+      sheet.eachRow((row, number) => { if (number === 1) return; const importedSection = String(value(row, "Sección") ?? "").trim(); if (importedSection) importedSections.add(importedSection); const title = String(value(row, "Tarea") ?? "").trim(); if (!title) return;
+        rows.push({ ref: String(value(row, "ID") ?? rows.length + 1).trim(), parentRef: String(value(row, "ID padre") ?? "").trim(), section: importedSection || "General", title, type: String(value(row, "Tipo") ?? "Tarea").trim() || "Tarea", startDate: importDate(value(row, "Inicio")), dueDate: importDate(value(row, "Fin")), actualDate: importDate(value(row, "Fecha real")), milestone: importedBoolean(value(row, "Hito")), status: importedStatus(value(row, "Estado")), priority: importedPriority(value(row, "Prioridad")), progress: Math.min(100, Math.max(0, Number(value(row, "Avance")) || 0)), owner: String(value(row, "Responsable") ?? "").trim(), description: String(value(row, "Descripción") ?? "").trim() });
       });
       if (!rows.length) throw new Error("No encontramos tareas en la plantilla.");
-      setImportRows(rows); setImportFileName(file.name);
+      setImportRows(rows); setImportFileName(file.name); if (importedSections.size) setInitialSections([...importedSections]);
     } catch (cause) { setImportRows([]); setImportFileName(""); setError(cause instanceof Error ? cause.message : "No se pudo leer el Excel."); }
     setImportBusy(false);
   };
