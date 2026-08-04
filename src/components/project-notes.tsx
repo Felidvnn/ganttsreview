@@ -58,10 +58,12 @@ export function ProjectNotes({ projectId, tasks, canEdit, onNavigate, onOpenTask
 
   useEffect(() => {
     load();
-    if (!hasSupabaseConfig) return;
+    const refresh = () => { void load(); };
+    window.addEventListener("orbit:refresh-data", refresh);
+    if (!hasSupabaseConfig) return () => window.removeEventListener("orbit:refresh-data", refresh);
     const supabase = createClient()!;
     const channel = supabase.channel(`project-notes-${projectId}`).on("postgres_changes", { event: "*", schema: "public", table: "project_notes", filter: `project_id=eq.${projectId}` }, () => load()).subscribe();
-    return () => { supabase.removeChannel(channel); };
+    return () => { window.removeEventListener("orbit:refresh-data", refresh); void supabase.removeChannel(channel); };
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const mentionMatches = useMemo(() => mentionQuery === null ? [] : tasks.filter((task) => !mentionedTaskIds.includes(task.id) && task.title.toLocaleLowerCase("es").includes(mentionQuery.toLocaleLowerCase("es"))).slice(0, 7), [mentionQuery, mentionedTaskIds, tasks]);

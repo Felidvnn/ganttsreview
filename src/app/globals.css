@@ -72,6 +72,7 @@ button { border: 0; background: none; cursor: pointer; }
 .topbar h1 { font-size: 15px; font-weight: 700; letter-spacing: -.15px; }
 .topbar-left { display: flex; align-items: center; gap: 10px; }
 .topbar-actions { display: flex; align-items: center; gap: 10px; }
+.topbar-refresh { position: relative; min-height: 31px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; color: #617169; border: 1px solid #dce5e1; border-radius: 8px; background: #fbfcfb; font-size: 7.5px; font-weight: 700; transition: color .15s ease,border-color .15s ease,background .15s ease; }.topbar-refresh:hover:not(:disabled) { color: var(--green-700); border-color: #b8cec6; background: #f2f8f5; }.topbar-refresh:disabled { cursor: wait; }.topbar-refresh > i { width: 6px; height: 6px; margin-left: 2px; border-radius: 50%; background: #a5afa9; box-shadow: 0 0 0 2px white; }.topbar-refresh.sync-live > i { background: #3f9279; }.topbar-refresh.sync-connecting > i { background: #c3934d; }.topbar-refresh.sync-offline > i { background: #b56558; }
 .icon-button { width: 36px; height: 36px; display: inline-grid; place-items: center; border: 1px solid transparent; border-radius: 8px; color: #63716b; }
 .icon-button:hover { background: #f1f4f2; color: var(--ink); }
 .search-button { width: 234px; height: 36px; padding: 0 9px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--subtle); background: #fafbfa; transition: width .2s; }
@@ -580,6 +581,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; }
 }
 
 @media (max-width: 760px) {
+  .topbar-refresh { width: 34px; min-height: 34px; padding: 0; justify-content: center; }.topbar-refresh span { display: none; }.topbar-refresh > i { position: absolute; top: 5px; right: 5px; width: 5px; height: 5px; }
   :root { --sidebar: 270px; }
   body { padding-bottom: 63px; }
   .sidebar { width: var(--sidebar); padding-top: 22px; transform: translateX(-100%); transition: transform .22s ease; box-shadow: 10px 0 40px rgba(0,0,0,.18); }.sidebar-open { transform: translateX(0); }.sidebar-close { display: grid; color: #a6bbb5; }.sidebar-backdrop { position: fixed; inset: 0; z-index: 35; width: 100%; height: 100%; background: rgba(4,21,17,.45); }

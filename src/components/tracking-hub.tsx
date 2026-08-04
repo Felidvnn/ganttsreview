@@ -1,7 +1,7 @@
 "use client";
 
 import { CalendarDays, ClipboardCheck } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { WeeklyItemData } from "@/lib/supabase/week-data";
 import { GlobalFollowups, type TrackingProject } from "./global-followups";
 import { WeeklyChecklist } from "./weekly-checklist";
@@ -15,6 +15,7 @@ export function TrackingHub({ initialItems, workspaceId, userId, weekStart, proj
 }) {
   const [tab, setTab] = useState<"week" | "pending">("week");
   const [weeklyItems, setWeeklyItems] = useState(initialItems);
+  useEffect(() => setWeeklyItems(initialItems), [initialItems]);
   const handleWeeklyItemsChange = useCallback((items: WeeklyItemData[]) => setWeeklyItems(items), []);
   return <>
     <nav className="tracking-tabs" aria-label="Vistas de seguimiento">

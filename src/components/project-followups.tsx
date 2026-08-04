@@ -31,7 +31,12 @@ export function ProjectFollowups({ projectId, tasks, canEdit }: { projectId: str
     else setItems((data || []) as Followup[]);
     setLoading(false);
   };
-  useEffect(() => { load(); }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    load();
+    const refresh = () => { void load(); };
+    window.addEventListener("orbit:refresh-data", refresh);
+    return () => window.removeEventListener("orbit:refresh-data", refresh);
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openCreate = () => { setEditingId(null); setDraft(emptyDraft); setError(""); setEditorOpen(true); };
   const openEdit = (item: Followup) => { setEditingId(item.id); setDraft({ title: item.title, notes: item.notes, owner: item.owner_label || "", dueDate: item.due_date || "", status: item.status, isBlocker: item.is_blocker, taskId: item.task_id || "" }); setError(""); setEditorOpen(true); };

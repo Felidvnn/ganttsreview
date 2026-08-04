@@ -4,10 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   BriefcaseBusiness, CalendarCheck2, CalendarDays, ChartNoAxesCombined,
-  Bell, CircleHelp, Heart, LayoutDashboard, LogOut, Menu, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, Users, X,
+  Bell, CircleHelp, Heart, LayoutDashboard, LogOut, Menu, PanelLeftClose, PanelLeftOpen, Plus, RefreshCw, Search, Settings, Users, X,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { people } from "@/lib/demo-data";
 import { createClient } from "@/lib/supabase/client";
 import { Avatar } from "./avatar";
@@ -40,6 +40,10 @@ export function AppShell({ children, shell }: { children: React.ReactNode; shell
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [weekPendingCount, setWeekPendingCount] = useState(shell?.weekPendingCount ?? 0);
+  const [syncStatus, setSyncStatus] = useState<"connecting" | "live" | "offline">("connecting");
+  const [isRefreshing, startRefresh] = useTransition();
+  const refreshTimerRef = useRef<number | null>(null);
+  const pendingRefreshRef = useRef(false);
   const currentTitle = pathname.startsWith("/projects/") ? "Detalle del proyecto" : (titles[pathname] ?? "Orbit");
   const profile = shell ? {
     id: shell.id, name: shell.name, initials: shell.initials,
@@ -61,6 +65,56 @@ export function AppShell({ children, shell }: { children: React.ReactNode; shell
     window.addEventListener("orbit:week-pending-delta", updatePendingCount);
     return () => window.removeEventListener("orbit:week-pending-delta", updatePendingCount);
   }, []);
+
+  const refreshData = useCallback((debounced = false) => {
+    const run = () => {
+      refreshTimerRef.current = null;
+      pendingRefreshRef.current = false;
+      window.dispatchEvent(new CustomEvent("orbit:refresh-data"));
+      startRefresh(() => router.refresh());
+    };
+    if (!debounced) {
+      if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current);
+      run();
+      return;
+    }
+    if (document.visibilityState === "hidden") {
+      pendingRefreshRef.current = true;
+      return;
+    }
+    if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = window.setTimeout(run, 450);
+  }, [router]);
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible" && pendingRefreshRef.current) refreshData();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [refreshData]);
+
+  useEffect(() => {
+    const supabase = createClient();
+    if (!supabase || !shell) { setSyncStatus("offline"); return; }
+    setSyncStatus("connecting");
+    const handleRemoteChange = () => refreshData(true);
+    const channel = supabase
+      .channel(`orbit-live-${shell.id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, handleRemoteChange)
+      .on("postgres_changes", { event: "*", schema: "public", table: "project_sections" }, handleRemoteChange)
+      .on("postgres_changes", { event: "*", schema: "public", table: "project_followups" }, handleRemoteChange)
+      .on("postgres_changes", { event: "*", schema: "public", table: "project_notes" }, handleRemoteChange)
+      .on("postgres_changes", { event: "*", schema: "public", table: "comments" }, handleRemoteChange)
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") setSyncStatus("live");
+        else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") setSyncStatus("offline");
+      });
+    return () => {
+      if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current);
+      void supabase.removeChannel(channel);
+    };
+  }, [refreshData, shell]);
 
   const toggleSidebar = () => {
     setSidebarCollapsed((current) => {
@@ -114,6 +168,9 @@ export function AppShell({ children, shell }: { children: React.ReactNode; shell
             <div><span className="mobile-brand">ORBIT</span><h1>{currentTitle}</h1></div>
           </div>
           <div className="topbar-actions">
+            <button type="button" className={`topbar-refresh sync-${syncStatus}`} onClick={() => refreshData()} disabled={isRefreshing} title={syncStatus === "live" ? "Sincronización automática activa" : "Actualizar los datos visibles"}>
+              <RefreshCw size={15} className={isRefreshing ? "spin" : ""} /><span>{isRefreshing ? "Actualizando…" : "Actualizar"}</span><i aria-hidden="true" />
+            </button>
             <button className="search-button" disabled title="Búsqueda global disponible próximamente">
               <Search size={18} />
               <input aria-label="Buscar" placeholder="Buscar proyectos, tareas..." disabled />

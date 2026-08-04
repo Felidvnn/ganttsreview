@@ -36,7 +36,12 @@ export function GlobalFollowups({ projects, weeklyItems, weekStart }: { projects
     else setItems((followupsResult.data || []) as Followup[]);
     setTasks((tasksResult.data || []) as ProjectTask[]); setLoading(false);
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    const refresh = () => { void load(); };
+    window.addEventListener("orbit:refresh-data", refresh);
+    return () => window.removeEventListener("orbit:refresh-data", refresh);
+  }, []);
 
   const openItems = useMemo(() => items.filter((item) => item.status !== "done").sort((a, b) => Number(b.is_blocker) - Number(a.is_blocker) || (a.due_date || "9999").localeCompare(b.due_date || "9999")), [items]);
   const grouped = projects.map((project) => ({ project, items: openItems.filter((item) => item.project_id === project.id) })).filter((group) => group.items.length);

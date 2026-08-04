@@ -65,7 +65,12 @@ export function ProjectBusinessCase({ projectId, canEdit }: { projectId: string;
     setLoading(false);
   }, [projectId]);
 
-  useEffect(() => { void loadFiles(); }, [loadFiles]);
+  useEffect(() => {
+    void loadFiles();
+    const refresh = () => { void loadFiles(); };
+    window.addEventListener("orbit:refresh-data", refresh);
+    return () => window.removeEventListener("orbit:refresh-data", refresh);
+  }, [loadFiles]);
 
   const getBlob = async (file: BusinessCaseFile) => {
     const { data, error: downloadError } = await createClient()!.storage

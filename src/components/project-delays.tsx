@@ -47,7 +47,12 @@ export function ProjectDelays({ projectId, tasks, canEdit, onOpenTask }: { proje
     setLoading(false);
   };
 
-  useEffect(() => { load(); }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    load();
+    const refresh = () => { void load(); };
+    window.addEventListener("orbit:refresh-data", refresh);
+    return () => window.removeEventListener("orbit:refresh-data", refresh);
+  }, [projectId, tasks]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const delayMetrics = useMemo(() => calculateTaskDelayMetrics(tasks), [tasks]);
   const delayedTasks = useMemo(() => sortTasksByDate(tasks.filter((task) => (delayMetrics.currentByTask.get(task.id) ?? 0) > 0 || records.some((record) => record.task_id === task.id))), [delayMetrics, records, tasks]);

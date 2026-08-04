@@ -11,6 +11,7 @@ type DisplayItem = WeeklyItemData & { priorityLabel: "Alta" | "Media" | "Baja"; 
 
 export function WeeklyChecklist({ initialItems, workspaceId, userId, weekStart, onItemsChange }: { initialItems: WeeklyItemData[]; workspaceId: string | null; userId: string | null; weekStart: string; onItemsChange?: (items: WeeklyItemData[]) => void }) {
   const [items, setItems] = useState(initialItems);
+  useEffect(() => setItems(initialItems), [initialItems]);
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   const [dueDate, setDueDate] = useState("");

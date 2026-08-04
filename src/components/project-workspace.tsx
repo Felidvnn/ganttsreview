@@ -98,6 +98,14 @@ export function ProjectWorkspace({ project, initialTasks, canEdit }: { project: 
   const statusColumns = useMemo(() => projectStatuses.filter((item) => item.enabled).sort((left, right) => left.sortOrder - right.sortOrder).map((item) => ({ value: item.status, label: item.label })), [projectStatuses]);
 
   useEffect(() => {
+    const nextMode = project.taskOrderMode || "date";
+    const nextTasks = nextMode === "manual" ? sortTasksManual(initialTasks) : sortTasksByDate(initialTasks);
+    setOrderMode(nextMode);
+    setTasks(applyTaskRollups(nextTasks, nextMode));
+    setSelectedTask((current) => current ? nextTasks.find((task) => task.id === current.id) ?? null : null);
+  }, [initialTasks, project.taskOrderMode]);
+
+  useEffect(() => {
     if (!hasSupabaseConfig) return;
     const supabase = createClient()!;
     Promise.all([
