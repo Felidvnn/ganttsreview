@@ -1,10 +1,11 @@
 "use client";
 
-import { Activity, AlertTriangle, ArrowUpDown, BarChart3, BriefcaseBusiness, CalendarCheck, ClipboardCheck, Clock3, Columns3, Download, FileCode2, FileImage, FileSpreadsheet, FileText, Filter, GanttChart, History, LayoutList, MessageSquareText, Milestone, Pencil, RefreshCw, RotateCcw, Settings2 } from "lucide-react";
+import { Activity, AlertTriangle, ArrowUpDown, BarChart3, BriefcaseBusiness, CalendarCheck, ClipboardCheck, Clock3, Columns3, Download, FileCode2, FileImage, FileSpreadsheet, FileText, Filter, GanttChart, History, LayoutList, MessageSquareText, Milestone, Pencil, RefreshCw, RotateCcw, Settings2, Timer, TrendingDown } from "lucide-react";
 import { differenceInCalendarDays, format } from "date-fns";
 import { es } from "date-fns/locale";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { calculateProjectScheduleMetrics } from "@/lib/project-health";
+import { calculateTaskDelayMetrics } from "@/lib/task-delay-metrics";
 import { buildProjectExcelWorkbook } from "@/lib/project-excel-export";
 import type { Project, Task, TaskStatus } from "@/lib/types";
 import { defaultProjectStatuses, statusLabel, type ProjectTaskStatus } from "@/lib/task-statuses";
@@ -84,6 +85,7 @@ export function ProjectWorkspace({ project, initialTasks, canEdit }: { project: 
   }), [project.dueDate, project.progress, tasks]);
   const currentProgress = scheduleMetrics.progress;
   const currentExpectedProgress = scheduleMetrics.expectedProgress;
+  const projectDelayMetrics = useMemo(() => calculateTaskDelayMetrics(tasks), [tasks]);
   const expectedDateLabel = format(new Date(), "dd MMM yyyy", { locale: es });
   const filteredTasks = useMemo(
     () => filterProjectTasks(tasks, statusFilter, deadlineFilter),
@@ -202,6 +204,7 @@ export function ProjectWorkspace({ project, initialTasks, canEdit }: { project: 
       <div><small>ESPERADO AL {expectedDateLabel.toUpperCase()}</small><b>{currentExpectedProgress}%</b><span className={currentProgress < currentExpectedProgress ? "negative" : "positive"}>{currentProgress === currentExpectedProgress ? "En línea con el plan" : `${Math.abs(currentProgress - currentExpectedProgress)} pts ${currentProgress < currentExpectedProgress ? "bajo el plan" : "sobre el plan"}`}</span></div>
       <div><small>TAREAS</small><b>{completedTasks}<em> / {tasks.length}</em></b><span>{tasks.length - completedTasks} pendientes</span></div>
       <div><small>PRÓXIMO HITO</small><b className="summary-text">{nextMilestone?.title ?? "Sin hitos pendientes"}</b><span><Clock3 size={13} />{nextMilestone?.dueDate ? `${format(new Date(`${nextMilestone.dueDate}T12:00:00`), "dd MMM", { locale: es })}${milestoneDays !== null ? ` · ${milestoneDays >= 0 ? `en ${milestoneDays} días` : `atrasado ${Math.abs(milestoneDays)} días`}` : ""}` : "Agrega un hito desde Crear"}</span></div>
+      <div className="project-impact-summary"><small>IMPACTO ESPERADO</small><b className="summary-impact-name">{project.capturableName || "Sin capturable definido"}</b><span className="summary-impact-values">{project.capturableReductionPercent !== undefined && <em><TrendingDown size={12} />−{new Intl.NumberFormat("es-CL", { maximumFractionDigits: 2 }).format(project.capturableReductionPercent)}%</em>}{project.hhtTransformed !== undefined && <em><Timer size={12} />{new Intl.NumberFormat("es-CL", { maximumFractionDigits: 2 }).format(project.hhtTransformed)} HHT</em>}{project.capturableReductionPercent === undefined && project.hhtTransformed === undefined && <em>Configurable desde Editar</em>}</span></div>
     </section>
     <nav className="project-tabs" aria-label="Vistas del proyecto">
       <button className={view === "gantt" ? "active" : ""} onClick={() => setView("gantt")}><GanttChart size={14} /> Gantt</button>
@@ -210,7 +213,7 @@ export function ProjectWorkspace({ project, initialTasks, canEdit }: { project: 
       <button className={view === "milestones" ? "active" : ""} onClick={() => setView("milestones")}><Milestone size={14} /> Hitos <span>{milestones.length}</span></button>
       <button className={view === "followups" ? "active" : ""} onClick={() => setView("followups")}><ClipboardCheck size={14} /> Pendientes</button>
       <button className={view === "notes" ? "active" : ""} onClick={() => setView("notes")}><MessageSquareText size={14} /> Notas</button>
-      <button className={view === "delays" ? "active" : ""} onClick={() => setView("delays")}><History size={14} /> Atrasos <span>{tasks.filter((task) => task.dueDate && ((task.actualCompletionDate && task.actualCompletionDate > task.dueDate) || (!task.actualCompletionDate && task.status !== "done" && task.dueDate < new Date().toISOString().slice(0, 10)))).length}</span></button>
+      <button className={view === "delays" ? "active" : ""} onClick={() => setView("delays")}><History size={14} /> Atrasos <span>{projectDelayMetrics.affectedTaskCount}</span></button>
       <button className={view === "business" ? "active" : ""} onClick={() => setView("business")}><BriefcaseBusiness size={14} /> Caso de negocio</button>
       <button className={view === "reports" ? "active" : ""} onClick={() => setView("reports")}><Download size={14} /> Informes</button>
       <button className={view === "activity" ? "active" : ""} onClick={() => setView("activity")}><Activity size={14} /> Actividad</button>

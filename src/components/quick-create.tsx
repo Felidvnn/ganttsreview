@@ -12,12 +12,41 @@ type ImportTaskRow = { ref: string; parentRef: string; section: string; title: s
 const suggestedSections = ["General", "Planificación", "Ejecución", "Cierre"];
 const importHeaders = ["ID", "ID padre", "Sección", "Tarea", "Tipo", "Inicio", "Fin", "Fecha real", "Hito", "Estado", "Prioridad", "Avance", "Responsable", "Descripción"];
 
-function importKey(value: unknown) { return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase(); }
-function importDate(value: unknown) {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
-  const text = String(value ?? "").trim(); if (!text) return "";
-  const iso = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/); if (iso) return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
-  const local = text.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/); return local ? `${local[3]}-${local[2].padStart(2, "0")}-${local[1].padStart(2, "0")}` : text;
+function excelValue(value: unknown): unknown {
+  if (!value || typeof value !== "object" || value instanceof Date) return value;
+  if ("result" in value) return excelValue((value as { result?: unknown }).result);
+  if ("richText" in value && Array.isArray((value as { richText?: unknown[] }).richText)) return (value as { richText: Array<{ text?: string }> }).richText.map((part) => part.text || "").join("");
+  if ("text" in value) return (value as { text?: unknown }).text;
+  return value;
+}
+function excelText(value: unknown) { const clean = excelValue(value); return clean == null ? "" : String(clean).trim(); }
+function importKey(value: unknown) { return excelText(value).normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase(); }
+function normalizedDate(year: number, month: number, day: number) {
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return "";
+  return `${year.toString().padStart(4, "0")}-${month.toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}`;
+}
+function importDate(value: unknown, label: string, row: number, column: string) {
+  const clean = excelValue(value);
+  if (clean == null || clean === "") return "";
+  if (clean instanceof Date && !Number.isNaN(clean.getTime())) return clean.toISOString().slice(0, 10);
+  if (typeof clean === "number" && Number.isFinite(clean)) {
+    const date = new Date(Date.UTC(1899, 11, 30) + Math.floor(clean) * 86400000);
+    if (clean > 0 && !Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
+  }
+  const text = String(clean).replace(/\u00a0/g, " ").trim();
+  if (!text) return "";
+  if (/^\d+(?:\.\d+)?$/.test(text)) {
+    const serial = Number(text); const date = new Date(Date.UTC(1899, 11, 30) + Math.floor(serial) * 86400000);
+    if (serial > 0 && !Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
+  }
+  const iso = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[T\s].*)?$/);
+  const local = text.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})(?:[T\s].*)?$/);
+  const normalized = iso
+    ? normalizedDate(Number(iso[1]), Number(iso[2]), Number(iso[3]))
+    : local ? normalizedDate(Number(local[3]), Number(local[2]), Number(local[1])) : "";
+  if (normalized) return normalized;
+  throw new Error(`${label} inválida en la fila ${row} (celda ${column}${row}). Usa una fecha de Excel o el formato DD-MM-AAAA.`);
 }
 function importedStatus(value: unknown) { const key = importKey(value); return ({ pendiente: "todo", todo: "todo", "en curso": "progress", progreso: "progress", progress: "progress", revision: "review", review: "review", bloqueada: "blocked", bloqueado: "blocked", blocked: "blocked", completada: "done", completado: "done", done: "done" } as Record<string, string>)[key] || "todo"; }
 function importedPriority(value: unknown) { const key = importKey(value); return key === "alta" || key === "3" ? 3 : key === "baja" || key === "1" ? 1 : 2; }
@@ -164,8 +193,8 @@ export function QuickCreate({ open, onClose }: { open: boolean; onClose: () => v
       if (!headers.has("tarea")) throw new Error("La hoja debe conservar la columna Tarea.");
       const value = (row: import("exceljs").Row, header: string) => { const column = headers.get(importKey(header)); return column ? row.getCell(column).value : undefined; };
       const rows: ImportTaskRow[] = []; const importedSections = new Set<string>();
-      sheet.eachRow((row, number) => { if (number === 1) return; const importedSection = String(value(row, "Sección") ?? "").trim(); if (importedSection) importedSections.add(importedSection); const title = String(value(row, "Tarea") ?? "").trim(); if (!title) return;
-        rows.push({ ref: String(value(row, "ID") ?? rows.length + 1).trim(), parentRef: String(value(row, "ID padre") ?? "").trim(), section: importedSection || "General", title, type: String(value(row, "Tipo") ?? "Tarea").trim() || "Tarea", startDate: importDate(value(row, "Inicio")), dueDate: importDate(value(row, "Fin")), actualDate: importDate(value(row, "Fecha real")), milestone: importedBoolean(value(row, "Hito")), status: importedStatus(value(row, "Estado")), priority: importedPriority(value(row, "Prioridad")), progress: Math.min(100, Math.max(0, Number(value(row, "Avance")) || 0)), owner: String(value(row, "Responsable") ?? "").trim(), description: String(value(row, "Descripción") ?? "").trim() });
+      sheet.eachRow((row, number) => { if (number === 1) return; const importedSection = excelText(value(row, "Sección")); if (importedSection) importedSections.add(importedSection); const title = excelText(value(row, "Tarea")); if (!title) return;
+        rows.push({ ref: excelText(value(row, "ID")) || String(rows.length + 1), parentRef: excelText(value(row, "ID padre")), section: importedSection || "General", title, type: excelText(value(row, "Tipo")) || "Tarea", startDate: importDate(value(row, "Inicio"), "Fecha de inicio", number, "F"), dueDate: importDate(value(row, "Fin"), "Fecha de término", number, "G"), actualDate: importDate(value(row, "Fecha real"), "Fecha real", number, "H"), milestone: importedBoolean(value(row, "Hito")), status: importedStatus(value(row, "Estado")), priority: importedPriority(value(row, "Prioridad")), progress: Math.min(100, Math.max(0, Number(excelValue(value(row, "Avance"))) || 0)), owner: excelText(value(row, "Responsable")), description: excelText(value(row, "Descripción")) });
       });
       if (!rows.length) throw new Error("No encontramos tareas en la plantilla.");
       setImportRows(rows); setImportFileName(file.name); if (importedSections.size) setInitialSections([...importedSections]);

@@ -1,6 +1,7 @@
 import { differenceInCalendarDays, format } from "date-fns";
 import { es } from "date-fns/locale";
 import { taskDurationDays, taskOverdueDays } from "@/lib/task-filters";
+import { calculateTaskDelayMetrics } from "@/lib/task-delay-metrics";
 import { sortTasksByDate, taskDepth, taskDisplaySection } from "@/lib/task-order";
 import { statusLabel, type ProjectTaskStatus } from "@/lib/task-statuses";
 import type { Project, Task } from "@/lib/types";
@@ -283,7 +284,8 @@ function buildExecutiveSheet(
 
   const roots = tasks.filter((task) => !task.parentId || !tasks.some((candidate) => candidate.id === task.parentId));
   const progress = roots.length ? Math.round(roots.reduce((total, task) => total + task.progress, 0) / roots.length) : 0;
-  const overdueCount = tasks.filter((task) => taskOverdueDays(task, today) > 0 || Boolean(task.actualCompletionDate && task.dueDate && task.actualCompletionDate > task.dueDate)).length;
+  const delayMetrics = calculateTaskDelayMetrics(tasks, today);
+  const overdueCount = delayMetrics.affectedTaskCount;
   const cards = [
     { from: 1, to: 4, label: "AVANCE GENERAL", value: `${progress}%`, color: projectColor },
     { from: 5, to: 8, label: "ACTIVIDADES", value: String(tasks.length), color: COLORS.dark },
@@ -302,7 +304,7 @@ function buildExecutiveSheet(
 
   let rowNumber = 8;
   sectionNames.forEach((section) => {
-    const sectionTasks = tasks.filter((task) => taskDisplaySection(task, tasks) === section); const completed = sectionTasks.filter((task) => task.status === "done" || task.progress >= 100).length; const delayed = sectionTasks.filter((task) => taskOverdueDays(task, today) > 0 || Boolean(task.actualCompletionDate && task.dueDate && task.actualCompletionDate > task.dueDate)).length;
+    const sectionTasks = tasks.filter((task) => taskDisplaySection(task, tasks) === section); const completed = sectionTasks.filter((task) => task.status === "done" || task.progress >= 100).length; const delayed = calculateTaskDelayMetrics(sectionTasks, today).affectedTaskCount;
     const row = sheet.getRow(rowNumber); row.values = [section, sectionTasks.length, completed, sectionTasks.length - completed, delayed, sectionTasks.length ? sectionTasks.reduce((total, task) => total + task.progress, 0) / sectionTasks.length / 100 : 0]; row.getCell(6).numFmt = "0%";
     for (let column = 1; column <= 6; column += 1) { const cell = row.getCell(column); cell.font = { name: "Aptos", size: 9, color: { argb: column === 5 && delayed ? COLORS.red : COLORS.dark }, bold: column === 1 }; setSolidFill(cell, rowNumber % 2 ? COLORS.lighter : COLORS.white); cell.alignment = { horizontal: column === 1 ? "left" : "center", vertical: "middle" }; cell.border = { bottom: { style: "hair", color: { argb: COLORS.grid } } }; }
     rowNumber += 1;

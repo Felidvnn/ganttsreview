@@ -162,6 +162,10 @@ const faqs = [
     answer: "Cuando sigue pendiente y su fecha de fin ya pasó. La aplicación muestra cuántos días lleva vencida. Una tarea terminada dentro del plazo no se considera atraso.",
   },
   {
+    question: "¿Cómo se resume el atraso sin contar dos veces padres y subtareas?",
+    answer: "El desfase actual corresponde al mayor atraso vigente. Las tareas afectadas y los días-tarea consideran las actividades atrasadas más específicas de cada rama; si una tarea padre resume subtareas también atrasadas, se muestra como contexto pero no vuelve a sumarse. Los eventos documentados se cuentan como trazabilidad y no como días adicionales.",
+  },
+  {
     question: "¿Qué provoca el estado En riesgo?",
     answer: "Una tarea bloqueada o una diferencia de 15 puntos o más entre lo esperado y lo informado. Si ya existe un vencimiento pendiente, el estado pasa a Atrasado. Prioridad Alta, por sí sola, no modifica la salud.",
   },
