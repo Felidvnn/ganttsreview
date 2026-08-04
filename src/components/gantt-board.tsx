@@ -831,7 +831,8 @@ export function GanttBoard({ initialTasks, visibleTaskIds, filtersActive = false
           {!displayOrderedItems.length && <div className="gantt-empty"><Check size={18} /><b>Sin tareas visibles</b><span>{filtersActive ? "No hay tareas que coincidan con los filtros actuales." : "Agrega planificación para preparar esta vista de presentación."}</span></div>}
         </div>
       </div>}
-      {!simpleView && <div className="gantt-desktop" style={{ "--day-size": `${100 / rangeDays}%`, "--segment-count": timelineSegments.length, minWidth: `${informationWidth + 565}px` } as React.CSSProperties} onWheel={navigateWheel}>
+      {!simpleView && <div className="gantt-desktop-scroll" tabIndex={0} aria-label="Carta Gantt desplazable horizontalmente">
+      <div className="gantt-desktop" style={{ "--day-size": `${100 / rangeDays}%`, "--segment-count": timelineSegments.length, minWidth: `${informationWidth + 565}px` } as React.CSSProperties} onWheel={navigateWheel}>
         <div className="gantt-grid gantt-header-row" style={gridStyle}><div className="gantt-task-head">TAREA{columnResizer("task", 180, 430)}</div>{visibleColumns.taskType && <div className="gantt-type-head">TIPO{columnResizer("taskType", 78, 180)}</div>}{visibleColumns.owner && <div className="gantt-owner-head">RESPONSABLES{columnResizer("owner", 90, 260)}</div>}{visibleColumns.status && <div className="gantt-status-head">ESTADO{columnResizer("status", 75, 180)}</div>}{visibleColumns.priority && <div className="gantt-priority-head">PRIORIDAD{columnResizer("priority", 65, 140)}</div>}{visibleColumns.progress && <div className="gantt-progress-head">AVANCE{columnResizer("progress", 65, 150)}</div>}{visibleColumns.startDate && <div className="gantt-date-head">INICIO{columnResizer("startDate", 88, 170)}</div>}{visibleColumns.dueDate && <div className="gantt-date-head">FIN{columnResizer("dueDate", 88, 170)}</div>}{visibleColumns.duration && <div className="gantt-duration-head">DÍAS{columnResizer("duration", 52, 100)}</div>}{visibleColumns.actualDate && <div className="gantt-date-head actual">REAL{columnResizer("actualDate", 88, 170)}</div>}<div className="gantt-timeline-head"><div className="gantt-weeks" style={{ gridTemplateColumns: `repeat(${timelineSegments.length}, 1fr)` }}>{timelineSegments.map((segment, index) => <span key={`${segment}-${index}`}>{segment}</span>)}</div><div className="gantt-days" style={{ gridTemplateColumns: `repeat(${rangeDays}, 1fr)` }}>{timelineDays.map((day, index) => <span className={dateValue(day) === todayKey ? "today" : ""} key={day.toISOString()}>{index % dayLabelEvery === 0 ? format(day, "d") : ""}</span>)}</div></div></div>
         <div className="gantt-body">
           {todayOffset >= 0 && todayOffset < rangeDays && <div className="today-line" style={{ left: `calc(${informationWidth}px + (100% - ${informationWidth}px) * ${todayOffset / rangeDays})` }} />}
@@ -884,6 +885,7 @@ export function GanttBoard({ initialTasks, visibleTaskIds, filtersActive = false
           ))}
           {!displayOrderedItems.length && <div className="gantt-empty"><Filter size={18} /><b>{filtersActive ? "Sin coincidencias" : "Aún no hay tareas"}</b><span>{filtersActive ? "Prueba con otro estado o plazo para volver a mostrar tareas." : readOnly ? "Este proyecto todavía no tiene planificación." : "Agrega una tarea o hito dentro de cualquiera de las secciones."}</span></div>}
         </div>
+      </div>
       </div>}
 
       {!simpleView && <div className="gantt-mobile">
